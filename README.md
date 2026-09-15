@@ -9,7 +9,7 @@ the prescribed shape.
 - **[`architecture.md`](architecture.md)**: the guideline. Sixteen
   sections, from the object model at the center to deployment at the
   edge. Read it once end to end; it is written to be read that way.
-- **[`lenses/`](lenses/README.md)**: 140 lenses in seven groups. Each
+- **[`lenses/`](lenses/README.md)**: 137 lenses in seven groups. Each
   restates one rule as something a reviewer can check against code and
   cites the section it comes from.
 - **[`skills/`](skills/)**: Claude Code skills. Seven group reviews, one

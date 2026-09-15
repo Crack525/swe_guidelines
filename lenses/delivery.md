@@ -12,81 +12,57 @@ rules (one channel per app, envelopes, degraded mode) to `network`,
 the app container boot order to `contracts`, and the credential and
 operator-gate rules behind the operator console to `context`.
 
-## DEL-01 Apps are dumb
+## DEL-01 Apps are dumb, and logic lands in the layer it belongs to
 
-**Principle.** Only UI rendering, local input handling, and
-device-specific behavior live in an app. Business logic and
-cross-service orchestration belong on the server.
+**Principle.** Only UI rendering, local input handling, and browser- or
+terminal-specific behavior live in an app. Logic meaningful to one app
+moves into that app's app-specific service; logic meaningful to more
+than one app moves into a domain service or the OM. Business logic and
+cross-service orchestration never live in the app.
 
 **Source.** Section 12, Apps Are Dumb.
 
-**Look for.** App source under `apps/`: component files, hooks, CLI
-command bodies, anything that computes a business outcome, validates a
-domain rule, or sequences calls to more than one service.
+**Look for.** App source under `apps/`: component files, hooks, and
+CLI command bodies that compute a business outcome, validate a domain
+rule, or sequence calls to more than one service; the same rule
+implemented in two apps; a domain rule living in an app-specific
+service that another app would need.
 
 **Violation.** A component or command that decides eligibility,
 totals, state transitions, or permissions; an app that calls two
 backend operations and combines their results to reach a business
-conclusion; domain constants duplicated into the app.
+conclusion; domain constants duplicated into the app; the portal and
+the CLI each implementing the same aggregation; an app-specific
+service holding a rule a second app later copies.
 
 **Severity.** high
 
-## DEL-02 App-only logic moves to the app's service, shared logic lower
-
-**Principle.** Logic meaningful to one app moves into that app's
-app-specific service, not into the app. Logic meaningful to more than
-one app moves into a domain service or the OM.
-
-**Source.** Section 12, Apps Are Dumb.
-
-**Look for.** New logic added to an app alongside an existing
-app-specific service; the same rule implemented in two apps; a domain
-rule living in an app-specific service that another app would need.
-
-**Violation.** The portal and the CLI each implement the same
-aggregation; an app-specific service holds a rule a second app later
-copies; an app grows a module of "helpers" that reason about the
-domain.
-
-**Severity.** medium
-
-## DEL-03 The cloud is AWS, and environments differ only by variables
+## DEL-02 One cloud, environments that differ by variables, promotion by digest
 
 **Principle.** Cloud deployments target AWS. Every environment has the
 same module graph; everything that differs between two environments is
 a variable, so the smaller environment predicts production with
-nothing more than scale changes.
+nothing more than scale changes. Production does not rebuild: it
+promotes the images the smaller environment already ran, by digest,
+behind an approval gate.
 
 **Source.** Section 13, Cloud: AWS.
 
 **Look for.** `deployment/terraform/environments/*`: the set of modules
 each environment instantiates and the variables it passes; resources
-that exist in one environment and not another.
+that exist in one environment and not another; the deploy workflow's
+production job, how it obtains its images, and whether an approval
+step guards it.
 
 **Violation.** A module, resource, or wiring present only in
 production; environment-specific branches in module code instead of
-variables; a service that runs only in the smaller environment.
-
-**Severity.** medium
-
-## DEL-04 Production promotes images by digest
-
-**Principle.** Production does not rebuild. It promotes the images the
-smaller environment already ran, by digest, behind an approval gate.
-
-**Source.** Section 13, Cloud: AWS.
-
-**Look for.** The deploy workflow: how the production job obtains its
-images, whether it references a digest or rebuilds from source, and
-whether an approval step guards it.
-
-**Violation.** A production job that runs a build; a production task
+variables; a production job that runs a build; a production task
 definition pinned to a tag rather than a digest; a promotion path with
 no approval gate.
 
 **Severity.** medium
 
-## DEL-05 Every cloud resource is declared in Terraform, in the monorepo
+## DEL-03 Every cloud resource is declared in Terraform, in the monorepo
 
 **Principle.** Networks, services, databases, topics, buckets, and IAM
 are all defined in Terraform that lives in the same monorepo. An
@@ -96,8 +72,8 @@ every environment run in CI.
 **Source.** Section 13, Infrastructure as Code.
 
 **Look for.** `deployment/terraform/` coverage of every resource the
-application names in its settings; the CI workflow's Terraform jobs
-(`fmt -check`, `validate`) across every environment.
+application names in its settings; the CI workflow's Terraform
+formatting and validation jobs across every environment.
 
 **Violation.** A resource referenced by settings or runbooks that no
 Terraform file declares; a runbook step that says "create in the
@@ -106,7 +82,7 @@ others.
 
 **Severity.** high
 
-## DEL-06 Dependencies in local containers, the application on the host
+## DEL-04 Dependencies in local containers, the application on the host
 
 **Principle.** Every technology dependency runs as a local container
 through one compose stack, using cloud images or wire-compatible
@@ -128,7 +104,7 @@ depends on a dashboard container.
 
 **Severity.** medium
 
-## DEL-07 External services have a twin behind the same interface
+## DEL-05 External services have a twin behind the same interface
 
 **Principle.** A hosted external service has one interface and at
 least two impls: the real client and a deterministic twin with the same
@@ -136,8 +112,9 @@ wire shapes that signs its own synthetic deliveries. Tests, the local
 stack, and CI run against the twin; the real client is proven against
 fixtures and a separate non-gating sandbox workflow. A twin refuses to
 run outside a local environment, and every record it produces names
-its provenance. This is a strong suggestion; the list of untwinned
-services is kept short.
+its provenance. This is a strong suggestion; a service that cannot be
+twinned faithfully gets a shared development tenant, and that list
+stays short.
 
 **Source.** Section 13, Twins for External Services.
 
@@ -153,7 +130,7 @@ that calls a sandbox.
 
 **Severity.** medium
 
-## DEL-08 Unsafe settings are refused at boot
+## DEL-06 Unsafe settings are refused at boot
 
 **Principle.** A settings combination that is only safe locally is
 refused by the process at boot with a message naming the setting, not
@@ -168,67 +145,59 @@ origin, a worker's registration with its expected tenant; the start-up
 inventory log line.
 
 **Violation.** A production-named environment that can start on the
-file secrets backend; a twin selectable off a loopback origin without
-an explicit override; a boot with no line saying which backends are in
-use; a runbook that carries a check the process could make itself.
+file secrets backend; a twin selectable off a loopback origin; a boot
+with no line saying which backends are in use; a runbook that carries
+a check the process could make itself.
 
 **Severity.** high
 
-## DEL-09 The monorepo is grouped by role
+## DEL-07 The monorepo is grouped by role, with one OM distribution
 
 **Principle.** The repository root groups code by role: `om/`,
 `infra/`, `integrations/`, `services/`, `workers/`, `apps/`,
 `clients/`, `deployment/`, `scripts/`, `docs/`. A system that starts
 as one API process has one entry under `services/` and grows the rest.
+The OM is a single distribution covering every namespace; namespaces
+are folders inside it, and migrations live with the OM, which owns the
+schema timeline.
 
-**Source.** Section 14, Monorepo Folder Structure.
+**Source.** Section 14, Monorepo Folder Structure; Layout Conventions.
 
 **Look for.** The top-level tree and where a new package was placed; a
-service or worker outside its role folder; domain code outside `om/`.
+service or worker outside its role folder; domain code outside `om/`;
+the number of distributions under `om/`; where `migrations/` sits.
 
 **Violation.** A worker under `services/`; a second object model
 package next to `om/`; a `utils/` or `common/` package at the root
 that holds domain types; application code under `deployment/` or
-`scripts/`.
+`scripts/`; a per-namespace OM package; a migration folder under a
+service or worker.
 
 **Severity.** medium
 
-## DEL-10 Src layout with tests as a sibling
+## DEL-08 Src layout, tests as a sibling, a product-specific root package
 
 **Principle.** Every Python distribution uses the `src/<root>/...`
 layout, and tests live in a `tests/` sibling, so the test runner
-exercises the installed package.
+exercises the installed package. The root package is named for the
+product; the layout is what matters, not the word.
 
 **Source.** Section 14, Layout Conventions.
 
 **Look for.** Each distribution's `pyproject.toml`, `src/` and
 `tests/` directories; test imports that resolve to the source tree
-instead of the installed package.
+instead of the installed package; the top-level package under each
+`src/`.
 
 **Violation.** A package at the distribution root without `src/`;
 tests inside the package; a `conftest.py` that inserts the source tree
-on `sys.path`.
+on `sys.path`; a root package whose name shadows a standard-library
+module; distributions in the same workspace using different root
+package names.
 
 **Severity.** low
 
-## DEL-11 The OM is one distribution and owns its migrations
-
-**Principle.** The OM is a single distribution covering every
-namespace; namespaces are folders inside it. Migrations live with the
-OM, and the schema timeline is owned by the OM, not by any service.
-
-**Source.** Section 14, Layout Conventions.
-
-**Look for.** The number of distributions under `om/`; where
-`migrations/` sits; whether any service package carries its own
-migration files.
-
-**Violation.** A per-namespace OM package; a migration folder under a
-service or worker; two packages that both define entities.
-
-**Severity.** medium
-
-## DEL-12 Workers and services share one project shape
+## DEL-09 Workers and services share one project shape
 
 **Principle.** Workers and services share `pyproject.toml`, `src/`,
 `tests/`, and a `main.py` behind a console entry point. Workers have no
@@ -248,7 +217,7 @@ point.
 
 **Severity.** low
 
-## DEL-13 Dockerfiles are central, two-stage, non-root, with a healthcheck
+## DEL-10 Dockerfiles are central, two-stage, non-root, with a healthcheck
 
 **Principle.** Dockerfiles live together under `deployment/docker/`,
 one per image, sharing an entrypoint. An image builds in two stages,
@@ -257,9 +226,9 @@ non-root user, and declares a healthcheck against `/healthz`.
 
 **Source.** Section 14, Layout Conventions.
 
-**Look for.** `deployment/docker/*.Dockerfile`: stages, the install
-command and lock file, the `USER` instruction, the `HEALTHCHECK`
-instruction, the shared entrypoint.
+**Look for.** One Dockerfile per image under `deployment/docker/`:
+stages, the install command and lock file, the `USER` instruction, the
+`HEALTHCHECK` instruction, the shared entrypoint.
 
 **Violation.** A Dockerfile inside a service folder; a single-stage
 image carrying build tooling; a process running as root; an image
@@ -267,7 +236,7 @@ without a healthcheck; an install that ignores the lock file.
 
 **Severity.** medium
 
-## DEL-14 Workspace tooling at the root, `make check` as the fast gate
+## DEL-11 Workspace tooling at the root, `make check` as the fast gate
 
 **Principle.** One `pyproject.toml` declares the uv workspace and one
 `package.json` with `pnpm-workspace.yaml` declares the TypeScript
@@ -287,57 +256,30 @@ the fast gate and never the integration or migration jobs.
 
 **Severity.** low
 
-## DEL-15 A product-specific root package name
-
-**Principle.** The root Python package is named for the product. The
-layout is what matters, not the word.
-
-**Source.** Section 14, Layout Conventions.
-
-**Look for.** The top-level package under each `src/`.
-
-**Violation.** A root package whose name shadows a standard-library
-module; different distributions in the same workspace using different
-root package names.
-
-**Severity.** low
-
-## DEL-16 React + TypeScript on Vite for browsers; Python for the CLI
+## DEL-12 React + TypeScript on Vite, rendered in the client; Python for the CLI
 
 **Principle.** Every browser app is React + TypeScript built with
-Vite into a static SPA. The operator console is a second application
-on the same stack. The CLI is Python.
+Vite into a static bundle that renders in the client only and whose
+only network surfaces are the gateway and the realtime channel. The
+operator console is a second application on the same stack. The CLI is
+Python.
 
-**Source.** Section 15, Stack.
+**Source.** Section 15, Stack; Client Rendering.
 
 **Look for.** `apps/*/package.json` and build config; a browser app
-introduced on a different framework or toolchain; the CLI's language.
+introduced on a different framework or toolchain; the build output and
+how it is served; any server runtime deployed alongside the bundle;
+network calls to hosts other than the gateway; the CLI's language.
 
 **Violation.** A second frontend framework or bundler in the
-workspace; a browser app with server-side rendering or API routes in
-its toolchain; a CLI rewritten outside Python.
+workspace; a rendering server or API routes in the app's toolchain or
+deployment; a bundle that calls a third-party API directly for domain
+data; two data-fetching paths (server and client) for the same screen;
+a CLI rewritten outside Python.
 
 **Severity.** medium
 
-## DEL-17 Client rendering only; a static bundle
-
-**Principle.** Rendering happens in the client only. The deployed
-artifact is a static bundle whose only network surfaces are the
-gateway and the realtime channel.
-
-**Source.** Section 15, Client Rendering.
-
-**Look for.** The build output and how it is served; any server
-runtime deployed alongside the bundle; network calls to hosts other
-than the gateway.
-
-**Violation.** A rendering server in the app's deployment; a bundle
-that calls a third-party API directly for domain data; two
-data-fetching paths (server and client) for the same screen.
-
-**Severity.** medium
-
-## DEL-18 TanStack Query for server state, Zustand for client state
+## DEL-13 TanStack Query for server state, Zustand for client state
 
 **Principle.** Server state lives in TanStack Query with one query-key
 factory per domain. Client state lives in Zustand. Realtime envelopes
@@ -356,7 +298,7 @@ library.
 
 **Severity.** medium
 
-## DEL-19 Views render, view-model hooks decide, model modules compute
+## DEL-14 Views render, view-model hooks decide, model modules compute
 
 **Principle.** Each screen has a pure Model module (row builders,
 codecs, formatting, predicates; no React), a View-Model hook that
@@ -376,7 +318,7 @@ screen with no model module and untested decision logic in the hook.
 
 **Severity.** medium
 
-## DEL-20 Generated types behind a facade; one transport client
+## DEL-15 Generated types behind a facade; one transport client
 
 **Principle.** Types are generated from the committed OpenAPI document
 into one file and re-exported through a curated facade. One small
@@ -395,19 +337,18 @@ that duplicate generated ones; `fetch` outside the client.
 
 **Severity.** medium
 
-## DEL-21 The operator console shares the stack, never the security context
+## DEL-16 The operator console shares the stack, never the security context
 
 **Principle.** The operator console is a separate application sharing
 the portal's stack, design tokens, component kit, sign-in flow, and API
 client. It has its own origin, bundle, and routes under `/v1/admin/*`,
-holds no realtime socket, and derives authority from the operator
-allowlist, not from a tenant role or a portal flag.
+holds no realtime socket, and derives its authority as Section 10
+states, not from a tenant role or a portal flag.
 
 **Source.** Section 15, The Operator Console.
 
 **Look for.** `apps/admin/`: its origin configuration, route prefix,
-absence of a socket provider, and how it decides who may enter;
-operator screens inside the portal.
+and absence of a socket provider; operator screens inside the portal.
 
 **Violation.** Operator pages in the portal behind a flag or role
 check; the console opening the realtime channel; the console served
@@ -415,7 +356,7 @@ from the portal's origin; a design kit forked instead of shared.
 
 **Severity.** high
 
-## DEL-22 The CLI is a thin REST client with exit codes
+## DEL-17 The CLI is a thin REST client with exit codes
 
 **Principle.** The CLI talks REST with an API key, attaches an
 idempotency key to every creating call, turns the outcome of a
@@ -429,11 +370,11 @@ headers, the follow loop and its exit code, TLS configuration.
 
 **Violation.** A creating command without an idempotency key; a
 follow that exits zero on failure; a bundled certificate store that
-ignores the OS's; domain logic implemented in a command body.
+ignores the OS's.
 
 **Severity.** medium
 
-## DEL-23 Exceptions carry status and code; one boundary translates
+## DEL-18 Exceptions carry status and code; one boundary translates
 
 **Principle.** Every platform exception is rooted at
 `PlatformException`, which carries `http_status` and a stable `code`.
@@ -450,12 +391,12 @@ routers.
 
 **Violation.** An exception not rooted at `PlatformException`; a
 manager raising a framework HTTP exception; a router mapping exception
-types to status codes; a domain exception without a shape and so
-surfacing as 500.
+types to status codes; a raised leaf exception that inherits no shape
+and so surfaces as 500.
 
 **Severity.** high
 
-## DEL-24 Standard logging, configured once, correlated by filter
+## DEL-19 Standard logging, configured once, correlated by filter
 
 **Principle.** Every module logs through `logging.getLogger(__name__)`.
 Formatting, level, and sink are configured once at boot, JSON in cloud
@@ -469,33 +410,37 @@ creation; any second logging library; how the request id reaches log
 records.
 
 **Violation.** A module configuring handlers or levels; a third-party
-logging library; `print` for operational output; the request id
-passed by hand into log calls or absent from them.
+logging library; the request id passed by hand into log calls or
+absent from them.
 
 **Severity.** medium
 
-## DEL-25 OpenTelemetry traces and Prometheus metrics, used directly
+## DEL-20 OpenTelemetry traces and Prometheus metrics, used directly
 
 **Principle.** Traces use OpenTelemetry directly; the tracer provider
 is configured only when an endpoint is set, otherwise the no-op tracer
 runs. Metrics are exposed on `/metrics` in Prometheus format through
-the client library directly. Neither is wrapped in a platform
-interface.
+the client library directly: every request counts once with its route
+template and status, and every queue, cache, and rate limit has a
+counter with an outcome label. Observability is the one capability
+used through its vendor API rather than a platform interface.
 
-**Source.** Section 16, Traces and Metrics.
+**Source.** Section 16, Traces and Metrics; Section 9, Principles.
 
 **Look for.** Tracing and metrics setup; a platform module that
 re-exposes spans, counters, or histograms under its own names; code
-paths that branch on whether tracing is configured.
+paths that branch on whether tracing is configured; the counters
+declared next to each queue, cache, and rate limit.
 
 **Violation.** A `PlatformTracer` or `MetricsInterface` wrapper; a
 second metrics system; code that skips instrumentation when no
 exporter is set instead of relying on the no-op tracer; a request
-counter missing the route template or status label.
+counter missing the route template or status label; a queue, cache,
+or rate limit with no outcome counter.
 
 **Severity.** low
 
-## DEL-26 One settings object per process; nothing below reads the environment
+## DEL-21 One settings object per process; nothing below reads the environment
 
 **Principle.** Configuration is read once at boot into one settings
 object from environment variables under one product prefix, with an
@@ -515,7 +460,7 @@ selection performed outside the settings and boot path.
 
 **Severity.** high
 
-## DEL-27 Product variation is a modelled entity, not a flag
+## DEL-22 Product variation is a modelled entity, not a flag
 
 **Principle.** Runtime variation that belongs to the product (what a
 tenant may do, what a plan allows) is a modelled entity with a manager
@@ -533,7 +478,7 @@ client constructed inside a manager.
 
 **Severity.** medium
 
-## DEL-28 Constraining decisions are ADRs, cited by number
+## DEL-23 Constraining decisions are ADRs, cited by number
 
 **Principle.** A decision that constrains future work is recorded under
 `docs/adr/` with context, decision, and consequences, dated and
@@ -542,17 +487,18 @@ numbered. Code and comments cite the ADR by number.
 
 **Source.** Section 16, Records of Decisions.
 
-**Look for.** A change that introduces or removes an invariant,
-boundary, or exception to a rule; whether an ADR accompanies it;
-whether the code that embodies it cites the number.
+**Look for.** A diff that adds to an enumerated-exceptions list,
+removes or skips a conformance test, or adds a lint or type suppression
+on one, and whether an ADR number appears in the same diff; whether
+the code that embodies a decision cites it.
 
 **Violation.** An exception to a guideline rule introduced with no
-ADR; an ADR referenced nowhere in code; `docs/architecture.md` left
-describing a shape the change removed.
+ADR; code that embodies an ADR's decision without citing its number;
+`docs/architecture.md` left describing a shape the change removed.
 
 **Severity.** medium
 
-## DEL-29 Checkable rules are checked by tests
+## DEL-24 Checkable rules are checked by tests
 
 **Principle.** A rule that a program can check is checked: every table
 has a role and no key crosses one, storage methods take `org_id` first

@@ -33,29 +33,37 @@ service.
 
 **Principle.** The OM is the source of truth for entities; the wire
 format and the table layout are projections derived from it, and
-neither changes the OM to suit itself.
+neither changes the OM to suit itself. Tenant entities carry no
+`org_id`; tenancy is a storage concern. The one exception is an entity
+whose readers have no tenant, which carries `org_id` as a model field
+so the reader knows whose it is.
 
-**Source.** Section 1, The Domain as the Source of Truth.
+**Source.** Section 1, The Domain as the Source of Truth; Section 8,
+Defining ORM Classes.
 
 **Look for.** Fields added to an entity that exist only to satisfy a
 response shape or a column; entity types imported into the network
 layer as the response body itself; storage-only concerns leaking into
-entity classes.
+entity classes; whether `org_id` appears on an entity and, when it
+does, whether that entity is read by an operator across tenants.
 
 **Violation.** An entity gaining a field because a client wanted it in
 JSON; an entity carrying a column-oriented attribute such as a raw
 foreign key that no manager reads; a route returning an OM entity
-directly instead of a view.
+directly instead of a view; `org_id` on an entity that only tenant
+operations read; an entity read across every tenant without it.
 
 **Severity.** medium
 
-## OM-03 The four mixins, with their exact fields
+## OM-03 The mixins declare exactly their fields
 
-**Principle.** Orthogonal traits are captured by a fixed set of mixins
-on a fieldless root: `Identifiable` (`id`), `Named` (`name`),
-`Trackable` (`created_at`, `updated_at`, `created_by`), and
-`SoftDeletable` (`deleted_at`, `deleted_by`), plus the `new_id()` and
-`utcnow()` helpers in the same base module.
+**Principle.** Orthogonal traits are captured by small mixins on a
+fieldless root, each declaring exactly the fields the guideline lists:
+`Identifiable` (`id`), `Named` (`name`), `Trackable` (`created_at`,
+`updated_at`, `created_by`), and `SoftDeletable` (`deleted_at`,
+`deleted_by`). A new trait is a new mixin, not a field on an existing
+one. The `new_id()` and `utcnow()` helpers live in the same base
+module.
 
 **Source.** Section 2, Naming Entities.
 
@@ -63,12 +71,12 @@ on a fieldless root: `Identifiable` (`id`), `Named` (`name`),
 declares; whether entities redeclare a mixin's fields locally; whether
 `new_id()` and `utcnow()` are the helpers used to construct entities.
 
-**Violation.** A mixin missing a field or carrying an extra one; an
-entity declaring its own `created_at` next to `Trackable`; a root class
-that holds fields; a local `datetime.now()` or id factory used in place
-of the base helpers.
+**Violation.** A field added to one of the listed mixins instead of a
+new mixin for the new trait; an entity declaring its own `created_at`
+next to `Trackable`; a root class that holds fields; a local
+`datetime.now()` or id factory used in place of the base helpers.
 
-**Severity.** high
+**Severity.** medium
 
 ## OM-04 Declaration order reads as a description
 
@@ -95,12 +103,15 @@ off. Inheritance in the OM is never a way to share code.
 **Source.** Section 2, Naming Entities.
 
 **Look for.** Base classes in the OM that carry methods or behavior
-rather than a trait; entity-to-entity inheritance; an entity carrying a
-mixin whose promise it does not keep.
+rather than a trait; entity-to-entity inheritance; for every entity
+composing `SoftDeletable`, a manager method that sets `deleted_at`, and
+for every entity composing `Trackable`, a manager method that sets
+`updated_at`.
 
 **Violation.** A `BaseOrder` with helper methods that `Order` and
-`ReturnOrder` extend; an entity inheriting `SoftDeletable` although
-nothing ever soft-deletes it; a mixin introduced to avoid repeating two
+`ReturnOrder` extend; an entity composing `SoftDeletable` while no
+manager method sets `deleted_at`, or composing `Trackable` while no
+method sets `updated_at`; a mixin introduced to avoid repeating two
 fields that mean different things in different entities.
 
 **Severity.** medium
@@ -174,7 +185,7 @@ fragment as a filter; a storage impl interpreting a string that another
 impl interprets differently; filter shapes declared separately for the
 manager and the storage.
 
-**Severity.** low
+**Severity.** medium
 
 ## OM-10 Entities are immutable; updates copy and write
 
@@ -196,19 +207,21 @@ value object to change it in place.
 ## OM-11 Everything on the base chain is frozen, rows excepted
 
 **Principle.** Immutability applies to every object built on the OM
-base chain, including context sub-objects and wire types. The one
+base chain, including value objects, read models, and context
+sub-objects, and to the views the network layer returns. The one
 deliberate exception is the ORM row classes, which never leave the
 storage impl.
 
-**Source.** Section 2, Immutability.
+**Source.** Section 2, Immutability; Section 10, Public Types.
 
-**Look for.** Value objects, read models, context types, and wire types
-that subclass the root or copy its configuration; where mutable row
-objects are returned from.
+**Look for.** Value objects, read models, and context types that
+subclass the root; the `View` base in the service's wire types and its
+frozen configuration; any class on the chain that overrides the frozen
+setting.
 
-**Violation.** A value object or wire type declared mutable; a storage
-method returning a row object to a manager; an entity constructed by
-wrapping a live row.
+**Violation.** A value object, read model, or context type declared
+mutable; a `View` base without the frozen configuration; an entity
+constructed by wrapping a live row.
 
 **Severity.** high
 
@@ -216,38 +229,37 @@ wrapping a live row.
 
 **Principle.** Every id is a time-ordered `uuid_v7` produced by
 `new_id()` by whoever constructs the entity, always above the storage
-layer. The database never assigns an id and nothing reads an id back
-after a write.
+layer.
 
 **Source.** Section 2, Identifiers.
 
-**Look for.** Where entity ids are created; the id factory used; any
-column default, sequence, or autoincrement producing ids; any write
-that returns a generated id.
+**Look for.** Where entity ids are created and which factory produces
+them; entity constructions that leave `id` for a lower layer to fill;
+any `uuid4()` or other generator imported by OM or service code.
 
-**Violation.** `uuid4()` used for an entity id; a table with a
-server-side id default; a storage method that inserts and returns the
-new id; an integer primary key on an entity table.
+**Violation.** `uuid4()` used for an entity id; an entity constructed
+without an id on the assumption that storage will assign one; an id
+minted inside a storage impl.
 
 **Severity.** high
 
-## OM-13 EMPTY_UUID is the system scope and the sentinel
+## OM-13 EMPTY_UUID is the sentinel for a required reference
 
-**Principle.** `EMPTY_UUID` is the reserved scope for cross-tenant
-reference data on cache and bucket calls, and the sentinel where a
-required, indexed reference means "none", keeping the column `NOT NULL`
-and the index simple.
+**Principle.** `EMPTY_UUID` is the one sentinel: where a required,
+indexed reference means "none", the column stays `NOT NULL` and the
+index simple by holding it. Its use as the system scope on infra calls
+is judged by `context`.
 
 **Source.** Section 2, Identifiers.
 
-**Look for.** How platform-owned data is keyed on infra calls; nullable
-reference columns that could be required; ad-hoc sentinels.
+**Look for.** The constant defined once in the base module; reference
+fields on entities that mean "none" for some rows and how they express
+it; ad-hoc sentinel constants elsewhere in the OM.
 
-**Violation.** A second sentinel constant invented for "no project";
-platform-owned data cached under a real tenant's id; a nullable
-reference column where the guideline's sentinel would keep it required.
+**Violation.** A second sentinel constant invented for "no warehouse";
+a required, indexed reference column made nullable to express "none".
 
-**Severity.** low
+**Severity.** medium
 
 ## OM-14 Namespaces mirror product swimlanes with one shape
 
@@ -263,9 +275,10 @@ interface is defined and whether the package root re-exports it; where
 entity classes and manager impls live.
 
 **Violation.** A namespace whose interface can only be imported from a
-deep path; entity classes next to the manager impl; a namespace that is
-a bag of unrelated entities; one concept buried as a sub-folder of
-another swimlane.
+deep path; entity classes next to the manager impl; a `types/` folder
+holding an entity that no manager interface in the same namespace
+accepts or returns; a product swimlane living as a sub-folder of
+another namespace's `types/`.
 
 **Severity.** medium
 
@@ -297,7 +310,7 @@ credentials) and audit (who did what, when, from which app) are
 first-class swimlanes with their own types, managers, and storage, not
 utilities hanging off the root.
 
-**Source.** Section 3, Pure Rules.
+**Source.** Section 3, Namespaces as Swimlanes.
 
 **Look for.** Where identity, membership, credential, and audit types
 live; whether they have a manager interface and a storage like any other

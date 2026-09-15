@@ -8,8 +8,8 @@ what a storage operation may do, how tables are declared, how rows and
 entities translate, how tables are grouped into database roles, and how
 the schema moves over time. It leaves entity shapes and identifier
 minting to `om`, the `org_id`-first rule, user scoping, and
-tenancy-on-write to `context`, and caches, topics, and queues to
-`async`.
+tenancy-on-write to `context`, interface imports and the in-memory
+impl to `contracts`, and caches, topics, and queues to `async`.
 
 ## STO-01 Code never relies on a database relationship
 
@@ -21,25 +21,16 @@ needs are plain id columns it reads and writes itself.
 
 **Source.** Section 8, Principles.
 
-**Look for.**
+**Look for.** Delete paths in managers and storage impls: the code
+deletes or detaches every dependent record itself rather than stopping
+after the parent. Migration SQL or table classes that declare `ON
+DELETE CASCADE` or `SET NULL` and code that counts on it, and manager
+code that catches an integrity error as its existence check.
 
-- Delete paths in managers and storage impls: does the code delete or
-  detach every dependent record itself, or does it stop after the
-  parent?
-- Migration SQL and table classes declaring `ON DELETE CASCADE`, `SET
-  NULL`, or relying on a constraint error to signal a missing parent.
-- Manager code that catches an integrity error as its existence check.
-- Relationship attributes on table classes that load related rows for
-  the business layer.
-
-**Violation.**
-
-- A manager deletes a parent and comments or assumes that children go
-  with it.
-- A referenced-entity existence check is implemented as "the insert
-  will fail if it does not exist".
-- A storage read returns a graph built from ORM relationship loading
-  rather than from explicit id columns the caller asked for.
+**Violation.** A manager deletes a parent and comments or assumes that
+children go with it. A referenced-entity existence check is implemented
+as "the insert will fail if it does not exist". A manager receives a
+related entity it never asked for by id, loaded for it by the schema.
 
 **Severity.** high
 
@@ -47,28 +38,23 @@ needs are plain id columns it reads and writes itself.
 
 **Principle.** A storage operation is one statement or one short,
 self-contained unit that the impl commits itself; nothing spans two
-storage calls.
+storage calls. Each operation opens its own short session and commits
+it; there is no session that outlives the call.
 
 **Source.** Section 8, Principles; A Storage Impl.
 
-**Look for.**
+**Look for.** Session or connection objects opened in one storage
+method and used in another, passed through a manager, held on `self`,
+or created in the constructor. A `begin`, `commit`, or `rollback`
+issued anywhere above the storage impl. Manager methods that call two
+storage writes and expect both or neither to land, or any unit-of-work,
+request-scoped session, or "outer scope commits" pattern.
 
-- Session or connection objects that are opened in one storage method
-  and used in another, passed through a manager, or held on an instance
-  between calls.
-- A `begin`, `commit`, or `rollback` issued anywhere above the storage
-  impl.
-- Manager methods that call two storage writes and expect both or
-  neither to land.
-- A unit-of-work, request-scoped session, or "outer scope commits"
-  pattern.
-
-**Violation.**
-
-- A manager wraps several storage calls in a transaction context.
-- A storage impl exposes `commit()` or accepts an externally opened
-  session per call.
-- A session outlives the storage method that opened it.
+**Violation.** A manager wraps several storage calls in a transaction
+context. A storage impl exposes `commit()` or accepts an externally
+opened session per call. A session is created in the constructor and
+shared by every method, or otherwise outlives the storage method that
+opened it.
 
 **Severity.** high
 
@@ -76,30 +62,22 @@ storage calls.
 
 **Principle.** Where atomicity is genuinely unavoidable (a work-queue
 claim, a ledger in a system that moves money), it is a single named
-interface method whose body is a pure function, so the interface stays
-technology-free and the exception is visible by name.
+interface method, so the interface stays technology-free and the
+exception is visible by name.
 
-**Source.** Section 8, Principles; A Storage Impl (Python tip).
+**Source.** Section 8, Principles; A Storage Impl.
 
-**Look for.**
+**Look for.** Storage interface methods that claim, settle, or mutate
+under a lock: each is one method whose name says what it does
+atomically, and the row lock or compare-and-set lives inside that one
+method. Locking primitives (`FOR UPDATE`, `SKIP LOCKED`, version
+columns) anywhere other than inside one such method.
 
-- Storage interface methods that claim, settle, or mutate under a lock:
-  each should be one method with a name that says what it does
-  atomically.
-- The body of such a method: a row lock or compare-and-set inside the
-  one method, applying a pure function to the row and writing the
-  result.
-- Locking primitives (`FOR UPDATE`, `SKIP LOCKED`, version columns)
-  anywhere other than inside one such method.
-
-**Violation.**
-
-- Locking spread across two interface methods (one to lock, one to
-  write) so the caller holds the lock between calls.
-- An atomic operation implemented in a manager by orchestrating several
-  storage calls.
-- An interface signature that exposes a lock, a session, or a
-  transaction handle.
+**Violation.** Locking spread across two interface methods (one to
+lock, one to write) so the caller holds the lock between calls. An
+atomic operation implemented in a manager by orchestrating several
+storage calls. An interface signature that exposes a lock, a session,
+or a transaction handle.
 
 **Severity.** high
 
@@ -110,23 +88,14 @@ detail. They never leak into the interface.
 
 **Source.** Section 8, Principles.
 
-**Look for.**
+**Look for.** Storage interface return types: entities, read models,
+and tuples of ids and entities, never row tuples or join projections
+named after tables. Read models whose shape is defined by a join rather
+than by the business question, and impls that join where a second read
+would do.
 
-- Storage interface return types: entities, read models, and tuples of
-  ids and entities, never row tuples or join projections named after
-  tables.
-- Storage impls that join across namespaces where a second read would
-  do.
-- Read models whose shape is defined by a join rather than by the
-  business question.
-
-**Violation.**
-
-- An interface method returns a shape whose fields mirror a `JOIN`
-  result or a table alias.
-- A join spans two database roles.
-- A namespace's storage impl joins another namespace's table to
-  compute a value the other namespace already exposes.
+**Violation.** An interface method returns a shape whose fields mirror
+a `JOIN` result or a table alias. A join spans two database roles.
 
 **Severity.** medium
 
@@ -138,48 +107,35 @@ Every query is written explicitly in its storage class.
 
 **Source.** Section 8, Principles.
 
-**Look for.**
+**Look for.** Migration SQL containing `CREATE TRIGGER`, `CREATE
+FUNCTION`, `CREATE PROCEDURE`, `CREATE RULE`, or generated columns that
+compute business values. Storage impls calling stored procedures or
+relying on a database-side computed timestamp for `updated_at`, and
+column defaults that encode business logic.
 
-- Migration SQL containing `CREATE TRIGGER`, `CREATE FUNCTION`,
-  `CREATE PROCEDURE`, `CREATE RULE`, or generated columns that compute
-  business values.
-- Storage impls calling stored procedures or relying on a
-  database-side computed timestamp for `updated_at`.
-- Column defaults that encode business logic.
-
-**Violation.**
-
-- A trigger maintains a denormalized column, a counter, or an audit
-  row.
-- `updated_at` is set by the database rather than by the manager's
-  copy.
-- A query calls a user-defined function.
+**Violation.** A trigger maintains a denormalized column, a counter, or
+an audit row. `updated_at` is set by the database rather than by the
+manager's copy. A query calls a user-defined function.
 
 **Severity.** high
 
 ## STO-06 IDs are passed top-down, never read back
 
 **Principle.** Every ID is passed top-down. We do not create an object
-in the DB and read its ID afterwards. IDs originate in the business
-layer.
+in the DB and read its ID afterwards. IDs originate above storage, with
+`new_id()`.
 
 **Source.** Section 8, Principles; Section 2, Identifiers.
 
-**Look for.**
+**Look for.** Primary key columns declared with a database default, a
+sequence, an identity, or `gen_random_uuid()`. Storage write methods
+that return the written entity's id, or that flush and read the row
+back to learn it. (How ids are minted at construction is `OM-12`.)
 
-- Primary key columns declared with a database default, a sequence, an
-  identity, or `gen_random_uuid()`.
-- Storage write methods that return the written entity's id, or that
-  flush and read the row back to learn it.
-- Entities constructed without an id and completed after the write.
-
-**Violation.**
-
-- A table's `id` column has `server_default` or autoincrement.
-- A `write_*` method returns a `UUID` that the caller did not already
-  hold.
-- An `INSERT ... RETURNING id` whose result the business layer waits
-  for.
+**Violation.** A table's `id` column has `server_default` or
+autoincrement. A `write_*` method returns a `UUID` that the caller did
+not already hold. An `INSERT ... RETURNING id` whose result the
+business layer waits for.
 
 **Severity.** high
 
@@ -187,54 +143,39 @@ layer.
 
 **Principle.** Defaults are set in the object model. Schema-level
 defaults are optional, kept as a convenience for admin and test
-operations where someone may need to write plain SQL. A default added
+operations where an operator writes plain SQL by hand. A default added
 to backfill a new column is removed once the backfill is done.
 
 **Source.** Section 8, Principles.
 
-**Look for.**
+**Look for.** A field whose default exists only on the table column
+and not on the entity class. A `server_default` introduced by an `ADD
+COLUMN` migration that is still present after the backfill migration.
 
-- A field whose default exists only on the table column and not on the
-  entity class.
-- A `server_default` introduced by an `ADD COLUMN` migration that is
-  still present after the backfill migration.
-- The migration check configured to compare server defaults, so a
-  leftover default is reported.
-
-**Violation.**
-
-- An entity field is required in the model but the code depends on the
-  column default to fill it.
-- A backfill default remains on a column that every write now sets.
-- The model and the schema disagree on a default and nothing reports
-  it.
+**Violation.** An entity field is required in the model but the code
+depends on the column default to fill it. A backfill default remains on
+a column that every write now sets.
 
 **Severity.** low
 
 ## STO-08 Storage is swappable through impl/ alone
 
 **Principle.** The storage layer must be swappable. Moving from a
-relational DB to a columnar DB on a different technology should only
-change `impl/`, never the interfaces or the entities.
+relational DB to a columnar DB on a different technology changes only
+`impl/`, never the interfaces or the entities.
 
 **Source.** Section 8, Principles; Namespace Shape.
 
-**Look for.**
+**Look for.** Interface signatures for technology types: sessions,
+engines, connections, ORM row classes, query builders, driver
+exceptions. Entities or read models that import from the ORM or the
+driver. Storage impl constructors where the session factory or pool is
+injected and never surfaced.
 
-- Interface signatures for technology types: sessions, engines,
-  connections, ORM row classes, query builders, driver exceptions.
-- Entities or read models that import from the ORM or the driver.
-- Storage impl constructors: the session factory or pool is injected
-  and never surfaced.
-
-**Violation.**
-
-- A storage interface method takes or returns an ORM row, a statement,
-  or a driver result.
-- A manager catches a driver exception by its technology-specific
-  class.
-- Swapping the impl would require editing the interface or a type in
-  `types/`.
+**Violation.** A storage interface method takes or returns an ORM row,
+a statement, or a driver result. A manager catches a driver exception
+by its technology-specific class. Swapping the impl would require
+editing the interface or a type in `types/`.
 
 **Severity.** high
 
@@ -247,21 +188,14 @@ ORM classes under `storage/tables/`, not exposed.
 
 **Source.** Section 8, Namespace Shape.
 
-**Look for.**
+**Look for.** Each OM namespace with persistence has `storage/`
+containing `__init__.py` (the interface), `impl/` (one module per
+technology), and `tables/`. Interfaces defined inside `impl/` or table
+classes defined next to entity types. (Who may import a table class is
+`CON-10`; the in-memory impl is `CON-04`.)
 
-- Each OM namespace with persistence has `storage/` containing
-  `__init__.py` (the interface), `impl/` (one module per technology,
-  `postgres.py` and `memory.py` at least), and `tables/`.
-- Imports of `tables/` modules from outside the owning `storage/impl/`
-  and the migrations environment.
-- Interfaces defined inside `impl/` or table classes defined next to
-  entity types.
-
-**Violation.**
-
-- A manager, router, or worker imports a table class.
-- A storage interface lives in `impl/` or in `types/`.
-- A namespace has a relational impl and no memory impl.
+**Violation.** A storage interface lives in `impl/` or in `types/`. A
+table class lives outside `storage/tables/`.
 
 **Severity.** medium
 
@@ -277,23 +211,18 @@ interface is untouched.
 
 **Source.** Section 8, Storage Root; Cross-Storage Dependencies.
 
-**Look for.**
+**Look for.** `StorageInterface` with `get_<entity>_storage()` per
+storage, `healthcheck()`, and `close()`. Higher layers receiving a
+`StorageInterface` rather than constructing namespace impls
+themselves. Storage impl constructors that take sibling storage
+interfaces, with the root passing them in the right order, and a
+memory root that constructs the same set of impls as the relational
+root.
 
-- `StorageInterface` with `get_<entity>_storage()` per storage,
-  `healthcheck()`, and `close()`.
-- Higher layers receiving a `StorageInterface` rather than constructing
-  namespace impls themselves.
-- Storage impl constructors that take sibling storage interfaces; the
-  root passing them in the right order.
-- A memory root that constructs the same set of impls as the relational
-  root.
-
-**Violation.**
-
-- A manager or container constructs a namespace storage impl directly.
-- A storage impl reaches a sibling storage through a global, the root,
-  or an attribute set after construction.
-- The memory root lacks a getter the relational root has.
+**Violation.** A manager or container constructs a namespace storage
+impl directly. A storage impl reaches a sibling storage through a
+global, the root, or an attribute set after construction. The memory
+root lacks a getter the relational root has.
 
 **Severity.** medium
 
@@ -302,27 +231,27 @@ interface is untouched.
 **Principle.** Table classes mirror the OM mixins so their definitions
 stay focused on what is specific to the entity. The common mixins live
 in the shared `tables/` package, with one storage-only addition:
-`org_id` rides on `IdentifiableMixin`. Concrete table classes compose
-the mixins their entity has, in the same house-style order as the OM.
+`org_id` rides on `IdentifiableMixin`. A global table composes
+`GlobalIdentifiableMixin`, which carries `id` alone. Concrete table
+classes compose the mixins their entity has, in the same house-style
+order as the OM.
 
 **Source.** Section 8, Defining ORM Classes.
 
-**Look for.**
+**Look for.** Table classes composing `IdentifiableMixin` (or
+`GlobalIdentifiableMixin` for a global table), `NamedMixin`,
+`TrackableMixin`, `SoftDeletableMixin` in the OM order, with the
+declarative base last. A table's mixin set matching its entity's mixin
+set, so an append-only entity's table has no tracking or soft-delete
+columns. `id`, `org_id`, `name`, `created_at`, `updated_at`,
+`created_by`, `deleted_at`, `deleted_by` redeclared on a concrete
+table.
 
-- Table classes composing `IdentifiableMixin`, `NamedMixin`,
-  `TrackableMixin`, `SoftDeletableMixin` in the OM order, with the
-  declarative base last.
-- A table's mixin set matching its entity's mixin set (an append-only
-  entity's table has no tracking or soft-delete columns).
-- `id`, `org_id`, `name`, `created_at`, `updated_at`, `created_by`,
-  `deleted_at`, `deleted_by` redeclared on a concrete table.
-
-**Violation.**
-
-- A table redeclares a mixin column by hand or declares lifecycle
-  columns its entity does not have.
-- Mixins are listed in a different order from the entity's bases.
-- `org_id` is declared per table instead of on the identity mixin.
+**Violation.** A table redeclares a mixin column by hand or declares
+lifecycle columns its entity does not have. Mixins are listed in a
+different order from the entity's bases. `org_id` is declared per
+table instead of on the identity mixin, or a global table carries
+`org_id` at all.
 
 **Severity.** medium
 
@@ -335,48 +264,35 @@ impl.
 
 **Source.** Section 8, Defining ORM Classes.
 
-**Look for.**
+**Look for.** Return statements in storage impls: every one returns an
+entity, a read model, or a plain value, never a row. Row objects passed
+to managers, cached, or published on a topic. Row classes marked frozen
+or otherwise prevented from in-place change.
 
-- Return statements in storage impls: every one returns an entity, a
-  read model, or a plain value, never a row.
-- Row objects passed to managers, cached, or published on a topic.
-- Row classes marked frozen or otherwise prevented from in-place
-  change.
-
-**Violation.**
-
-- A storage method returns a table instance or a list of them.
-- A row instance is held on a manager or stored in a cache.
-- A table class is frozen, so updates rebuild rows instead of applying
-  changes in place.
+**Violation.** A storage method returns a table instance or a list of
+them. A row instance is held on a manager or stored in a cache. A table
+class is frozen, so updates rebuild rows instead of applying changes in
+place.
 
 **Severity.** high
 
 ## STO-13 Column order is part of the model
 
-**Principle.** Every table opens with the same header block (`id,
-org_id, name, created_at, updated_at, created_by, deleted_at,
-deleted_by`) and its own columns follow. A new column is declared at
-the end of its class so the physical table and the class stay in step
-when the column is appended.
+**Principle.** Every table opens with the columns of the mixins it
+composes, in house-style order, and its own columns follow. A new
+column is declared at the end of its class so the physical table and
+the class stay in step when the column is appended.
 
 **Source.** Section 8, Defining ORM Classes.
 
-**Look for.**
+**Look for.** Mixin columns carrying the negative `sort_order` bands
+that pin the header block to the front. A table class edited in the
+same change as an `ADD COLUMN` migration: the new attribute is the last
+one in the class.
 
-- Mixin columns carrying the negative `sort_order` bands that pin the
-  header block to the front.
-- A table class edited in the same change as an `ADD COLUMN`
-  migration: the new attribute is the last one in the class.
-- A test that compares physical column order against the metadata on a
-  live database.
-
-**Violation.**
-
-- A new column is inserted in the middle of a table class while the
-  migration appends it to the table.
-- Mixin columns render after the domain columns in the initial schema.
-- The metadata-vs-database order check is missing or skipped.
+**Violation.** A new column is inserted in the middle of a table class
+while the migration appends it to the table. Mixin columns render after
+the domain columns in the initial schema.
 
 **Severity.** low
 
@@ -391,23 +307,17 @@ asks for one.
 
 **Source.** Section 8, Defining ORM Classes; Section 2, Identifiers.
 
-**Look for.**
+**Look for.** Feed tables (events, audit, streams, lists ordered by
+creation) carrying `Index(org_id, id)` and queries ordering by `id`.
+Any `DESC` index on an id column. A single-column index on `org_id`
+next to a compound index that starts with `org_id`. Indexes on columns
+no query filters on, or missing on columns every list query filters
+on.
 
-- Feed tables (events, audit, streams, lists ordered by creation)
-  carrying `Index(org_id, id)` and queries ordering by `id`.
-- Any `DESC` index on an id column.
-- A single-column index on `org_id` next to a compound index that
-  starts with `org_id`.
-- Indexes on columns no query filters on, or missing on columns every
-  list query filters on.
-
-**Violation.**
-
-- A feed orders by `created_at` with its own index instead of by `id`.
-- Both `ix_<table>_org_id` and `ix_<table>_org_id_id` exist on one
-  table.
-- An index was added for a filter that happens in Python after the
-  read.
+**Violation.** A feed orders by `created_at` with its own index instead
+of by `id`. Both `ix_<table>_org_id` and `ix_<table>_org_id_id` exist
+on one table. An index was added for a filter that happens in Python
+after the read.
 
 **Severity.** low
 
@@ -422,51 +332,33 @@ base.
 
 **Source.** Section 8, Translation.
 
-**Look for.**
+**Look for.** Storage impls calling the shared helpers for reads,
+inserts, and in-place updates. Hand-written field-by-field mapping in
+an impl whose row and entity have matching field names. A translation
+base class that impls inherit from. `apply_row` never touching
+`org_id`.
 
-- Storage impls calling the shared helpers for reads, inserts, and
-  in-place updates.
-- Hand-written field-by-field mapping in an impl whose row and entity
-  have matching field names.
-- A translation base class that impls inherit from.
-- `apply_row` never touching `org_id`.
-
-**Violation.**
-
-- A storage impl reimplements `to_row` or `to_model` locally for a
-  one-to-one shape.
-- A `TranslatorBase` or mixin carries per-entity translation that
-  multi-entity storages have to contort around.
-- An update path rebuilds the row from scratch instead of applying the
-  entity onto the existing row.
+**Violation.** A storage impl reimplements `to_row` or `to_model`
+locally for a one-to-one shape. A `TranslatorBase` or mixin carries
+per-entity translation that multi-entity storages have to contort
+around. An update path rebuilds the row from scratch instead of
+applying the entity onto the existing row.
 
 **Severity.** low
 
-## STO-16 One upsert primitive, one short session per operation
+## STO-16 One upsert primitive
 
 **Principle.** A shared base provides the one write primitive every
 namespace uses: an upsert that reads the existing row by id, applies
-the entity onto it or inserts a new one, and commits. Each operation
-opens its own short session and commits it; there is no session that
-outlives the call.
+the entity onto it or inserts a new one, and commits.
 
 **Source.** Section 8, A Storage Impl.
 
-**Look for.**
+**Look for.** Write methods that are one call to the shared upsert.
+Hand-rolled insert-or-update logic repeated across impls.
 
-- Write methods that are one call to the shared upsert.
-- Session lifetime: opened inside the method with a context manager,
-  closed on exit.
-- Hand-rolled insert-or-update logic repeated across impls.
-- A session or connection stored on `self` and reused across calls.
-
-**Violation.**
-
-- A namespace impl performs its own select-then-insert-or-update
-  sequence instead of calling the base primitive.
-- A session is created in the constructor and shared by every method.
-- Two methods share one session so a failure in the second leaves the
-  first uncommitted.
+**Violation.** A namespace impl performs its own select-then-insert-
+or-update sequence instead of calling the base primitive.
 
 **Severity.** medium
 
@@ -478,33 +370,28 @@ the single source of truth: the ORM base derives the schema from it,
 each role has its own connection URL defaulting to the shared one, and
 the root opens one engine and pool per distinct URL. No cross-role
 foreign keys and no cross-role statements; consistency between roles
-is the manager's concern. Analytics never runs in the request path of
-any role; it reads a mirror.
+is the manager's concern. A database-backed topic bus connects to the
+queue role. Analytics never runs in the request path of any role; it
+reads a mirror.
 
 **Source.** Section 8, Database Roles.
 
-**Look for.**
+**Look for.** The table-to-role map: every table present, `schema`
+derived from it rather than declared on the class. Statements that name
+tables from two roles, and the base class refusing them. Foreign keys
+whose target is in another role. Settings exposing one URL per role,
+each defaulting to the shared URL, with one engine per distinct URL,
+and the database-backed topics impl reading the queue role's URL. A
+manager writing the core row first, then the stream row, with an
+idempotency key on the retry path. Reporting queries that scan across
+tenants inside a request. Unit tests asserting the map is complete and
+that no key or statement crosses a role.
 
-- The table-to-role map: every table present, `schema` derived from it
-  rather than declared on the class.
-- Statements that name tables from two roles; the base class refusing
-  them.
-- Foreign keys whose target is in another role.
-- Settings exposing one URL per role, each defaulting to the shared
-  URL; one engine per distinct URL.
-- A manager writing the core row first, then the stream row, with an
-  idempotency key on the retry path.
-- Reporting queries that scan across tenants inside a request.
-- Unit tests asserting the map is complete and that no key or
-  statement crosses a role.
-
-**Violation.**
-
-- A table declares its own `schema` or is missing from the map.
-- A join, foreign key, or transaction spans two roles.
-- A cross-tenant analytical query runs against the `core` role in a
-  request handler.
-- The role tests are absent.
+**Violation.** A table declares its own `schema` or is missing from the
+map. A join, foreign key, or transaction spans two roles. The
+database-backed topic bus connects to a role other than `queue`. A
+cross-tenant analytical query runs against the `core` role in a request
+handler. The role tests are absent.
 
 **Severity.** high
 
@@ -521,26 +408,19 @@ test gate; a downgrade-then-upgrade is in CI.
 
 **Source.** Section 8, Migrations.
 
-**Look for.**
+**Look for.** `om/migrations/sql/<role>/YYYYMMDDHHMM_<slug>.up.sql`
+and `.down.sql` pairs, with a wrapper under `versions/<role>/` that
+only calls the SQL runner. Wrappers containing hand-written schema
+operations instead of `run_sql`. A diff touching a migration file that
+has already been applied in any environment. SQL in one role's chain
+naming a table of another role. The fast gate running the
+metadata-vs-schema check per role, and CI running downgrade then
+upgrade of the head.
 
-- `om/migrations/sql/<role>/YYYYMMDDHHMM_<slug>.up.sql` and `.down.sql`
-  pairs, with a wrapper under `versions/<role>/` that only calls the
-  SQL runner.
-- Wrappers containing hand-written schema operations instead of
-  `run_sql`.
-- A diff touching a migration file that has already been applied in
-  any environment.
-- SQL in one role's chain naming a table of another role.
-- The fast gate running the metadata-vs-schema check per role; CI
-  running downgrade then upgrade of the head.
-
-**Violation.**
-
-- Two migrations share a revision id, or a chain has two heads that
-  were merged by editing history.
-- An applied `.up.sql` is modified rather than followed by a new
-  migration.
-- A migration lives in a service instead of with the OM.
-- The check step is missing from the fast gate.
+**Violation.** Two migrations share a revision id, or a chain has two
+heads that were merged by editing history. An applied `.up.sql` is
+modified rather than followed by a new migration. A migration lives in
+a service instead of with the OM. The check step is missing from the
+fast gate.
 
 **Severity.** medium

@@ -16,19 +16,22 @@ rate limits, and public types to `network`.
 
 ## CTX-01 Context is the first argument of every operation
 
-**Principle.** Every operation on a manager, storage-facing service, or
-worker handler takes a context as its first argument. By the time a
-manager runs, the context is fully built.
+**Principle.** Every manager, service, and worker-handler operation
+takes a context as its first argument, except the enumerated
+principal-less operations (CTX-16). By the time a manager runs, the
+context is fully built.
 
 **Source.** Section 5, OpContext; Section 7, The Business Layer.
 
 **Look for.** Manager interfaces, service interfaces, worker handlers:
-the first parameter of every async method.
+the first parameter of every async method, and the docstring of any
+method that has none.
 
 **Violation.** A manager or service method that takes a user id, an
 org id, or a token instead of a context; a method that takes the
 context in any position other than first; a handler that fetches
-identity from a request object.
+identity from a request object; a context-less method that is not one
+of the documented principal-less operations.
 
 **Severity.** high
 
@@ -37,16 +40,19 @@ identity from a request object.
 **Principle.** The security context holds the user, the organization,
 the role, the permissions, the teams, and the credential kind; the app
 context holds the app type and version; the context holds the request
-id and an optional trace id.
+id and an optional trace id. The request id reaches every log line,
+every audit row, and the error envelope from the context, never by
+hand.
 
 **Source.** Section 5, OpContext.
 
-**Look for.** The context type definitions and every place that reads
-identity, tenant, or app information.
+**Look for.** The context type definitions, every place that reads
+identity, tenant, or app information, and the audit record type.
 
 **Violation.** Identity or tenant data passed beside the context as
 extra parameters; a second ad-hoc "current user" object; app type
-derived from headers below the gateway; a request id threaded by hand.
+derived from headers below the gateway; a request id threaded by hand;
+an audit row written without the context's request id.
 
 **Severity.** medium
 
@@ -83,16 +89,17 @@ team membership resolved by a manager from storage on every call
 instead of read from the context; team checks in a router or a storage
 impl.
 
-**Severity.** medium
+**Severity.** high
 
 ## CTX-05 The context is built only at the three entry points
 
 **Principle.** A context is constructed by the gateway on request
-arrival, by a worker when it claims a unit of work, and by the
-bootstrap that seeds an environment. Nothing else constructs one.
+arrival, by the claim operation a worker calls to take a unit of work,
+and by the bootstrap that seeds an environment. Nothing else constructs
+one.
 
-**Source.** Section 5, OpContext; Section 10, The Gateway; Section 11,
-The Work Queue.
+**Source.** Section 5, OpContext; Section 7, Operations Without a
+Principal; Section 10, The Gateway.
 
 **Look for.** Every construction site of the context type and its
 sub-objects.
@@ -129,17 +136,17 @@ parameter.
 thread locals, or hidden lookups. Everything ambient flows through the
 context.
 
-**Source.** Section 5, OpContext; Section 9, Principles.
+**Source.** Section 5, OpContext; Section 16, Logs.
 
 **Look for.** Module-level globals holding a current user, tenant, or
-request; thread-local or context-variable reads in managers, storage,
-or workers; infra handles fetched from a global registry.
+request; thread-local or context-variable reads of identity, tenant,
+or request in managers, storage, or workers.
 
 **Violation.** A manager reading the current tenant from a context
-variable; a storage impl reading a global "current org"; an infra
-handle looked up rather than injected. The one allowed context variable
-carries the request id for log enrichment only, and the authoritative
-value stays on the context.
+variable; a storage impl reading a global "current org"; a request id
+read from a context variable where the context is in hand. The one
+allowed context variable carries the request id for log enrichment
+only, and the authoritative value stays on the context.
 
 **Severity.** high
 
@@ -184,10 +191,10 @@ relational impl performs.
 
 ## CTX-10 Tenant first, then user, then the narrowing ids
 
-**Principle.** Storage and service signatures start with the tenant id,
-add the user id when the scope is personal to a user, and then peel
-scope from broad to narrow. Manager signatures start at the level below
-the context, since tenant and user are already in it.
+**Principle.** Storage signatures start with `org_id`, add `user_id`
+when the scope is personal to a user, and then peel scope from broad to
+narrow. Manager and service signatures take the context first and
+start at the level below it, since tenant and user are already in it.
 
 **Source.** Section 7, Parameters; Section 8, Namespace Shape.
 
@@ -196,8 +203,8 @@ interfaces; user-scoped storages.
 
 **Violation.** A storage method taking the entity id before the tenant
 id; a user-scoped read that takes only the tenant and filters by user
-inside the impl, or takes no user at all; a manager method that takes
-an org id or user id the context already carries.
+inside the impl, or takes no user at all; a manager or service method
+that takes an org id or user id the context already carries.
 
 **Severity.** medium
 
@@ -244,8 +251,7 @@ disjoint namespaces.
 
 **Source.** Section 2, Identifiers; Section 9, Principles.
 
-**Look for.** Cache and bucket calls for platform-owned data;
-unauthenticated rate-limit subjects.
+**Look for.** Cache and bucket calls for platform-owned data.
 
 **Violation.** Platform-owned data cached or stored under a real
 tenant's id; a made-up sentinel other than `EMPTY_UUID`; an impl that
@@ -254,7 +260,27 @@ it.
 
 **Severity.** medium
 
-## CTX-14 Topic payloads carry the tenant
+## CTX-14 Cache and bucket calls take the tenant first
+
+**Principle.** Cache and bucket calls take `org_id` as a first-class
+parameter so a mistake cannot cross tenants at the key level. A value
+personal to a user carries the user id inside the key. The bucket impl
+prefixes every storage key with the tenant, so one tenant's blobs cannot
+be read or listed by another.
+
+**Source.** Section 9, Principles; Cache; Buckets.
+
+**Look for.** The cache and bucket interfaces, every call site in
+managers, and the key layout inside the bucket and cache impls.
+
+**Violation.** A cache or bucket method without a tenant parameter; a
+call that passes one tenant's id for another tenant's data; a personal
+value cached under a key with no user id; a bucket impl that stores
+keys unprefixed so a list by prefix can cross tenants.
+
+**Severity.** high
+
+## CTX-15 Topic payloads carry the tenant
 
 **Principle.** Every topic payload carries `org_id`, so a consumer can
 filter by tenant before it acts.
@@ -264,13 +290,13 @@ filter by tenant before it acts.
 **Look for.** The payload base class, every payload class, and every
 subscriber handler.
 
-**Violation.** A payload without a tenant field; a subscriber that
-acts on an event without comparing the payload's tenant to its own
-scope.
+**Violation.** A payload class that does not extend the base and so
+carries no tenant; a socket handler that forwards an event to a client
+without comparing the payload's tenant to the connection's tenant.
 
 **Severity.** high
 
-## CTX-15 Principal-less operations produce a context
+## CTX-16 Principal-less operations produce a context
 
 **Principle.** The few operations that exist before a principal does
 (claiming work, sweeping every tenant, resolving an inbound webhook
@@ -284,13 +310,13 @@ Work Queue.
 return; their docstrings.
 
 **Violation.** A context-less method that performs tenant work
-directly instead of returning a context; an undocumented context-less
-method; a growing set of such methods used as a convenience to skip
-authorization.
+directly instead of returning a context; a context-less manager method
+whose docstring does not say platform-internal, or whose return type is
+neither a context nor a list of `tuple[UUID, Entity]`.
 
 **Severity.** high
 
-## CTX-16 A worker runs under the enqueuer's identity with a service role
+## CTX-17 A worker runs under the enqueuer's identity with a service role
 
 **Principle.** When a worker claims a work item, it rebuilds the
 enqueuer's principal from the item's `created_by` under a service role.
@@ -310,7 +336,7 @@ or with no tenant at all.
 
 **Severity.** high
 
-## CTX-17 The credential prefix decides who accepts it
+## CTX-18 The credential prefix decides who accepts it
 
 **Principle.** Each credential kind has a distinct prefix, and the
 prefix decides which gateway dependency accepts it. A machine caller's
@@ -329,7 +355,7 @@ expires or that carries a tenant it was not scoped to.
 
 **Severity.** high
 
-## CTX-18 Sockets open with a single-use ticket
+## CTX-19 Sockets open with a single-use ticket
 
 **Principle.** A long-lived connection is opened with a single-use,
 short-lived ticket minted by an authenticated request, never with a
@@ -347,7 +373,7 @@ does not re-validate the underlying credential.
 
 **Severity.** high
 
-## CTX-19 The operator plane has its own gate and its own context
+## CTX-20 The operator plane has its own gate and its own context
 
 **Principle.** Operator routes resolve the bearer to an identity, admit
 it only when the identity is on the operator allowlist and the

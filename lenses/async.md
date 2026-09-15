@@ -13,23 +13,22 @@ context to `context`, database roles and the storage side of the work
 queue to `storage`, and the realtime edge with its wait-versus-notify
 patterns to `network`.
 
-## ASY-01 Infrastructure is injected through interfaces
+## ASY-01 Infrastructure is never reached through ambient state
 
 **Principle.** Every infra capability is fronted by an interface with
-swappable impls. A manager or service impl receives it through its
-constructor, typed by the interface, never through a global, a thread
-local, or `OpContext`.
+swappable impls, and a handle to one arrives only through a
+constructor at boot, never through a global, a thread local, a
+module-level client, or `OpContext`.
 
 **Source.** Section 9, Principles.
 
-**Look for.** Constructor signatures of manager and service impls; any
-module-level cache, bucket, topic, queue, or secret client; any
-attribute on the context that hands out an infra handle.
+**Look for.** Any module-level cache, bucket, topic, queue, or secret
+client; any attribute on the context that hands out an infra handle;
+any impl constructed inside a manager or handler body.
 
 **Violation.** A manager imports a concrete cache or bucket client and
 builds it itself; a global `topics` object is reached from inside a
-handler; an infra handle is read off `ctx`; a constructor parameter is
-typed by an impl class rather than the `*Interface`.
+handler; an infra handle is read off `ctx`.
 
 **Severity.** high
 
@@ -153,10 +152,11 @@ development and tests.
 **Look for.** The `Buckets` enum; the bucket interface; how uploads
 and downloads reach clients; the local impl.
 
-**Violation.** A blob stored in a database column or on a service's
-disk; a bucket name passed as a free string; a route that streams a
-large upload through the process instead of handing out a presigned
-URL; a local setup that needs the cloud object store to run tests.
+**Violation.** A large blob (a document, an upload, an export) stored
+in a column or on a service's disk; a bucket name passed as a free
+string; a route that streams a large upload through the process
+instead of handing out a presigned URL; a local setup that needs the
+cloud object store to run tests.
 
 **Severity.** medium
 
@@ -185,15 +185,20 @@ consumer name missing from `subscribe`.
 subscribed at the time and nothing to anyone else. It carries wake-ups
 and live updates; durable work is a row in the work queue, and a
 missed notification degrades to polling latency, never to lost work.
+When the bus is backed by the database, it connects to the queue role,
+because the processes that enqueue work and the workers they wake must
+share it.
 
-**Source.** Section 9, Topics.
+**Source.** Section 9, Topics; Section 8, Database Roles.
 
 **Look for.** What each topic handler does with a message; whether any
-handler is the only path by which some work gets done.
+handler is the only path by which some work gets done; which database
+URL the database-backed topic impl opens.
 
 **Violation.** A handler that performs the work itself with no backing
 row; a producer that publishes a task and writes nothing durable; a
-consumer that assumes it will see every message ever published.
+consumer that assumes it will see every message ever published; a
+database-backed bus pointed at a role other than the queue role.
 
 **Severity.** high
 
@@ -241,22 +246,24 @@ handler that does the whole job inline.
 **Principle.** A secret store holds values; the object model holds only
 references. A value is resolved for exactly one operation and
 discarded. It never enters an entity, a log line, an audit payload, an
-error message, or a subprocess environment. A process that names itself
-staging or production and finds the file backend configured refuses to
-start.
+error message, or a subprocess environment. An error names the secret
+and the store it was looked up in, never a value. A process that names
+itself staging or production and finds the file backend configured
+refuses to start.
 
 **Source.** Section 9, Secrets.
 
 **Look for.** Entity fields that hold credentials; where `get(name)` is
 called and how long the value lives; log and audit calls near secret
-resolution; subprocess environment construction; the boot-time backend
-check.
+resolution; the text of the not-found error; subprocess environment
+construction; the boot-time backend check.
 
 **Violation.** An entity with a token or password field; a secret
 resolved at boot and kept on an object; a value in a log line, an
-error string, or an audit payload; a subprocess inheriting the parent's
-full environment; a production deployment on the file backend that
-starts anyway.
+error string, or an audit payload; a not-found error that omits the
+secret name or the store; a subprocess inheriting the parent's full
+environment; a production deployment on the file backend that starts
+anyway.
 
 **Severity.** high
 
@@ -285,20 +292,25 @@ new one; a webhook handler that ignores the provider's delivery id.
 
 **Principle.** Web services do not spawn background jobs or schedule
 recurring tasks. Every such need is an explicit worker role with its
-own container and deployment. The one thing that is not a job is a
-topic subscriber that only forwards events to sockets its own process
-holds; anything that writes, retries, or outlives a connection is a
-worker.
+own container and deployment: an always-on container with the same
+shape as a web service minus a public network surface, placed on
+bigger compute when it needs more without changing shape. The one
+thing that is not a job is a topic subscriber that only forwards
+events to sockets its own process holds; anything that writes,
+retries, or outlives a connection is a worker.
 
-**Source.** Section 11, Workers, Not Web-Service Side Jobs.
+**Source.** Section 11, Workers, Not Web-Service Side Jobs;
+Implementation Options.
 
 **Look for.** Background tasks created inside a service process;
 timers and schedulers in service code; in-process subscribers and what
-they do.
+they do; how each worker role is deployed.
 
 **Violation.** A request handler that starts a task which outlives the
 request; a service that runs a periodic sweep; an in-process subscriber
-that writes to storage or retries deliveries.
+that writes to storage or retries deliveries; a worker deployed as a
+scheduled one-shot or a serverless function rather than an always-on
+container.
 
 **Severity.** high
 
@@ -307,21 +319,20 @@ that writes to storage or retries deliveries.
 **Principle.** A work item names its kind and target, carries a unique
 idempotency key, a queue routing string, a status, an `available_at`,
 its claim (`claimed_by`, `lease_expires_at`), and its attempts. Enqueue
-writes the row and then publishes the wake-up. Claim is one storage
-method that takes the oldest available row and stamps claim and lease
-together. Completion marks done, requeues with a growing delay, or
-fails when attempts run out; handing an item back costs no attempt.
+writes the row and then publishes the wake-up. Claim takes the oldest
+available row in the named queue and stamps claim and lease together.
+Completion marks done, requeues with a growing delay, or fails when
+attempts run out; handing an item back costs no attempt.
 
 **Source.** Section 11, The Work Queue.
 
 **Look for.** The work item type; the enqueue, claim, complete, defer,
 and requeue methods; the order of write and publish in enqueue.
 
-**Violation.** A publish before the row exists; a claim that reads and
-then updates in two statements; a row with no lease or no attempt
-count; a failed attempt requeued immediately with no delay; a hand-back
-that burns an attempt; a second table or topic invented for routing
-when the `queue` string would do.
+**Violation.** A publish before the row exists; a row with no lease or
+no attempt count; a failed attempt requeued immediately with no delay;
+a hand-back that spends an attempt; a second table or topic invented
+for routing when the `queue` string would do.
 
 **Severity.** high
 
@@ -363,7 +374,7 @@ the queue; a cancelled task that leaves its record claimed until the
 lease expires; a rollout configured to run extra workers during a
 deploy.
 
-**Severity.** medium
+**Severity.** high
 
 ## ASY-19 Maintenance is an idempotent sweep every worker runs
 

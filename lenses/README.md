@@ -10,7 +10,7 @@ keeps each review narrow enough to be thorough.
 | Group id    | File            | Covers                                                                                          |
 |-------------|-----------------|-------------------------------------------------------------------------------------------------|
 | `om`        | `om.md`         | Sections 1 to 3: source of truth, mixins, immutability, identifiers, namespaces, pure rules     |
-| `contracts` | `contracts.md`  | Sections 4, 6, 7, 10 (Direction of Calls), 16 (App Container): interfaces, injection, wiring   |
+| `contracts` | `contracts.md`  | Sections 4, 6, 7, 10 (Service Interfaces, Direction of Calls), 16 (App Container): interfaces, injection, wiring |
 | `context`   | `context.md`    | Sections 5, 6, 7, 8, 10, 11: OpContext, AdminContext, authorization, tenancy, provenance        |
 | `storage`   | `storage.md`    | Section 8 and Identifiers: storage principles, tables, translation, roles, migrations           |
 | `async`     | `async.md`      | Sections 9, 11, and 10 (idempotency, orchestration): infra, queues, workers, park vs fail       |
@@ -44,6 +44,9 @@ Ids are the group prefix plus a two-digit number: `OM`, `CON`, `CTX`,
 `STO`, `ASY`, `NET`, `DEL`. Severity is the default weight of a breach:
 `high` breaks a boundary or a guarantee, `medium` bends a shape the
 guideline relies on, `low` is a convention.
+
+`Look for` and `Violation` are prose, one to three sentences each, wrapped
+at about 72 columns like the rest of the file.
 
 A lens restates the guideline; it never adds a rule the guideline does
 not state. When the guideline changes, the lens changes with it, and

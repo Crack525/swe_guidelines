@@ -151,7 +151,7 @@ rewrite an entity after it was constructed.
 > was written and nothing else has to remember the timestamp.
 
 The same rule applies to every object built on the OM base chain,
-including the sub-objects of `OpContext`, and to the wire types
+including the sub-objects of `OpContext`, and to the views
 described in the network layer. The one deliberate exception is the
 SQLAlchemy row classes under `tables/`, which must be mutable so the
 session can track writes; they never leak past the storage boundary.
@@ -209,6 +209,11 @@ the package root, so consumers import it with a short path:
 `from platform.om.orders import OrderManagerInterface`. `types/` holds
 the classes of Section 2. `impl/` holds the concrete manager classes.
 
+Cross-cutting namespaces are namespaces like any other. Tenancy
+(organizations, users, memberships, credentials) and audit (who did
+what, when, from which app) are first-class swimlanes with their own
+types, managers, and storage, not utilities hanging off the root.
+
 ### Pure Rules
 
 A namespace that carries real business logic keeps the pure part of it
@@ -221,11 +226,6 @@ both call the same function and cannot drift apart.
 
 > **Principle:** A namespace's rules are pure functions in one module.
 > Storage impls and manager impls call them; nothing re-implements them.
-
-Cross-cutting namespaces are namespaces like any other. Tenancy
-(organizations, users, memberships, credentials) and audit (who did
-what, when, from which app) are first-class swimlanes with their own
-types, managers, and storage, not utilities hanging off the root.
 
 ## 4. Interfaces
 
@@ -251,10 +251,10 @@ lets one `*Interface` back several impls at once.
 
 ### Multiple impls per interface
 
-An interface has at least two impls, a technology impl and an
-in-memory impl, and they are interchangeable at wiring time. Callers never know which one they are
-holding. Names put the technology last: `WarehouseStoragePostgresImpl`,
-`WarehouseStorageMemoryImpl`.
+An interface has at least two impls, a technology impl and an in-memory
+impl, and they are interchangeable at wiring time. Callers never know
+which one they are holding. Names put the technology last:
+`WarehouseStoragePostgresImpl`, `WarehouseStorageMemoryImpl`.
 
 The in-memory impl is the default for unit tests and the fast local
 gate. It keeps state in an in-process dict and exercises real behavior
@@ -413,8 +413,9 @@ class AdminContext(Platform):
 `AdminContext` has no `org_id`, on purpose. Operator managers take it
 and nothing else; tenant managers take `OpContext` and nothing else. The
 type system, not convention, keeps the two planes apart: an operator
-route cannot act inside a tenant, and a tenant route cannot reach the operator plane. The operator plane is described further in Section 10 (the
-gateway) and Section 15 (the operator console).
+route cannot act inside a tenant, and a tenant route cannot reach the
+operator plane. The operator plane is described further in Section 10
+(the gateway) and Section 15 (the operator console).
 
 > **Principle:** Tenant operations take `OpContext`; operator operations
 > take `AdminContext`. The two never mix in one signature.
@@ -431,8 +432,9 @@ The system has three layers:
 
 Each layer is a swimlane with its own language and its own
 responsibilities. Upper layers depend on interfaces exposed by lower
-layers, never on their internals. Infrastructure capabilities (Section 9) are injected into any of these
-layers and never leak a technology choice across a boundary.
+layers, never on their internals. Infrastructure capabilities (Section
+9) are injected into any of these layers and never leak a technology
+choice across a boundary.
 
 Authorization and tenancy are split across two layers on purpose.
 Permissions and visibility are business decisions and live in
@@ -487,13 +489,13 @@ holds the same snapshot the storage does.
 ### Parameters
 
 Parameters follow a top-down hierarchy, from the broadest scope to the
-narrowest. In a manager signature the tenant and the user are already
-in `ctx`, so the visible parameters start at the next level:
-`(ctx, customer_id, order_id, line_id)` peels customer, then order,
-then line. Optional filters follow the required scoping ids as keyword
-parameters with defaults. The same ordering applies in storage and
-service interfaces, where `org_id` and, where relevant, `user_id`
-appear explicitly at the front.
+narrowest. In a manager signature the tenant and the user are already in
+`ctx`, so the visible parameters start at the next level: `(ctx,
+customer_id, order_id, line_id)` peels customer, then order, then line.
+Optional filters follow the required scoping ids as keyword parameters
+with defaults. The same ordering applies in storage interfaces, where
+`org_id` and, where relevant, `user_id` appear explicitly at the front,
+and in service interfaces, which take `ctx` first like managers.
 
 ### Cross-Manager Dependencies
 
@@ -1285,9 +1287,10 @@ class ServicesInterface:
 ```
 
 The impl handles routing, request and response serialization, and
-translation between the public types and the OM entities. A router translates: it builds the entity or the arguments from the
-request, calls one manager, and projects the result onto a view. When
-a router starts deciding something, the decision moves into a manager.
+translation between the public types and the OM entities. A router
+translates: it builds the entity or the arguments from the request,
+calls one manager, and projects the result onto a view. When a router
+starts deciding something, the decision moves into a manager.
 
 ### The Gateway
 
@@ -1315,10 +1318,11 @@ The gateway owns a short list of edge concerns, each done once:
 -   **Request id.** The gateway accepts an inbound `x-request-id` or
     mints one, stamps it on the context, echoes it in the response
     header, and attaches it to the log context and the trace span.
--   **Error envelope.** One handler translates `PlatformException` (Section 16, Exceptions) into `{"error": {"code", "message", "request_id"}}`
-    with the status the exception names; one catch-all turns anything
-    else into a 500 with the same shape. Routers never set error status
-    codes.
+-   **Error envelope.** One handler translates `PlatformException`
+    (Section 16, Exceptions) into `{"error": {"code", "message",
+    "request_id"}}` with the status the exception names; one catch-all
+    turns anything else into a 500 with the same shape. Routers never
+    set error status codes.
 -   **Rate limits.** A per-route dependency counts in the shared cache
     (`CacheInterface.increment`) so every replica shares one budget.
     The subject is the credential id; an unauthenticated route keys on

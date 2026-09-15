@@ -7,13 +7,14 @@ App Container) of `architecture.md`.
 
 This group judges how the pieces of the system are declared, wired, and
 allowed to call each other: interfaces and their impls, constructor
-injection, the roots that assemble everything at boot, and the
-direction calls may flow across layers. It leaves the shape of entities
-and mixins to `om`, everything about `OpContext`, authorization, and
-tenancy to `context`, the internals of tables, translation, and
-migrations to `storage`, the semantics of each infra capability to
-`async`, and the gateway, public types, and realtime channel to
-`network`.
+injection, the roots that assemble everything at boot, the shape of a
+manager operation, and the direction calls may flow across layers. It
+leaves the shape of entities and mixins to `om`, everything about
+`OpContext`, authorization, and tenancy to `context`, the internals of
+tables, translation, and migrations to `storage`, the semantics of each
+infra capability to `async`, the gateway, public types, and realtime
+channel to `network`, and settings objects and environment reads to
+`delivery`.
 
 ## CON-01 Every layer is defined by an interface
 
@@ -53,22 +54,24 @@ and callers use them.
 
 **Severity.** medium
 
-## CON-03 Multiple impls, technology named last
+## CON-03 At least two impls, technology named last
 
-**Principle.** An interface usually has more than one impl, and they are
-interchangeable at wiring time. Names put the technology last:
-`WarehouseStoragePostgresImpl`, `WarehouseStorageMemoryImpl`.
+**Principle.** An interface has at least two impls, a technology impl
+and an in-memory impl, and they are interchangeable at wiring time.
+Names put the technology last: `WarehouseStoragePostgresImpl`,
+`WarehouseStorageMemoryImpl`.
 
 **Source.** Section 4, Multiple impls per interface.
 
 **Look for.** Impl class names under `impl/` folders; the set of impls
-behind each storage and infra interface.
+behind each storage and infra interface; the names that appear in
+interface signatures and in callers.
 
-**Violation.** An impl name leads with the technology or omits `Impl`;
-an interface has one impl and its callers depend on details of that
-impl; a technology-specific name leaks into an interface or a caller.
+**Violation.** An interface has a single impl; an impl name leads with
+the technology or omits `Impl`; a technology-specific name leaks into an
+interface or a caller.
 
-**Severity.** low
+**Severity.** medium
 
 ## CON-04 The in-memory impl is a full implementation
 
@@ -111,35 +114,40 @@ answered.
 ## CON-06 Dependencies are injected through constructors, typed by interface
 
 **Principle.** Dependencies are passed into impls through the
-constructor and typed by interface, never by impl.
+constructor and typed by interface, never by impl. A dependency on a
+peer manager or a peer storage is an implementation detail of the impl
+that holds it; the interface never gains a parameter for it.
 
-**Source.** Section 4, Injectability.
+**Source.** Section 4, Injectability; Section 7, Cross-Manager
+Dependencies.
 
 **Look for.** Constructor signatures of every impl; type annotations of
-stored dependencies; any construction of a dependency inside a method.
+stored dependencies; any construction of a dependency inside a method;
+interface method signatures that mention another manager or storage.
 
 **Violation.** A constructor parameter is annotated with a concrete impl
 class or `Any`; an impl instantiates its own storage, cache, or peer
 manager; a dependency is fetched from a module-level global, a
-registry, or a service locator at call time.
+registry, or a service locator at call time; an interface method takes
+a peer manager or storage as an argument.
 
 **Severity.** high
 
-## CON-07 Tunables arrive as an options object
+## CON-07 Tunables arrive as a frozen options object
 
-**Principle.** A manager that has tunables takes a small frozen options
-object in its constructor, built once at boot from settings. Managers
-never read environment variables.
+**Principle.** A manager that has tunables (a default page size, a lease
+length, a threshold) takes a small frozen options object in its
+constructor, built once at boot from settings.
 
 **Source.** Section 4, Injectability.
 
-**Look for.** Reads of environment variables or settings objects inside
-manager, storage, or service impls; numeric or duration constants that
-vary by environment.
+**Look for.** Constructor parameters that carry numbers, durations, or
+limits; module-level constants inside impls that differ between
+deployments; whether the options object is frozen and built once.
 
-**Violation.** An impl calls the environment or a settings loader
-directly; a tunable is a hard-coded constant that differs between
-deployments; an options object is mutable or is rebuilt per call.
+**Violation.** A tunable is a hard-coded constant that differs between
+deployments; tunables arrive as loose positional numbers instead of one
+options object; an options object is mutable or is rebuilt per call.
 
 **Severity.** medium
 
@@ -161,15 +169,14 @@ object's underscore-prefixed attributes; constructor parameters with a
 a dependency is typed optional only to dodge an import cycle; two
 namespaces import each other's impls.
 
-**Severity.** high
+**Severity.** medium
 
 ## CON-09 Roots wire everything at boot
 
 **Principle.** A root class constructs the concrete impls in the right
-order and wires them together. The storage root, the infra root, the
-business root, and the services root each expose one getter per member,
-and the business root hands back one frozen object with a field per
-manager.
+order and wires them together. The storage, infra, and services roots
+expose one getter per member; the business root returns one frozen
+object with a field per manager.
 
 **Source.** Section 7, The Business Layer; Section 4, Injectability.
 
@@ -202,9 +209,9 @@ reads a session or connection object from a storage impl.
 
 ## CON-11 Infrastructure never leaks a technology across a boundary
 
-**Principle.** The infrastructure layer may be blended into any layer
-where necessary, but its presence is never allowed to leak a technology
-choice across a boundary.
+**Principle.** Infrastructure capabilities (Section 9) are injected into
+any of the three layers and never leak a technology choice across a
+boundary.
 
 **Source.** Section 6, Separation of Layers.
 
@@ -230,9 +237,9 @@ managers and storage; storage calls storage. Nothing reaches up.
 imports of managers from any storage module; callbacks that let a lower
 layer invoke an upper one.
 
-**Violation.** A manager holds a `*ServiceInterface`; a storage impl
-calls a manager; a lower layer publishes an event only to have an upper
-layer complete the same operation.
+**Violation.** A manager impl constructor or method holds or calls a
+`*ServiceInterface`; a storage impl calls a manager; a lower layer is
+handed a callback that invokes an upper layer.
 
 **Severity.** high
 
@@ -263,32 +270,39 @@ the other service as a plain argument.
 
 **Source.** Section 10, Direction of Calls.
 
-**Look for.** Operations that span two namespaces; where the sequence of
-calls is written; what the manager method takes as arguments.
+**Look for.** Service impl methods that call more than one namespace;
+the parameter list of the manager method such a service impl calls;
+manager methods that sequence calls to another namespace's
+service-level operation.
 
-**Violation.** A manager calls another service to obtain an input it
-could have been handed; orchestration across namespaces is written
-inside the OM; a service impl passes its own dependency handle down
-into a manager.
+**Violation.** A manager method's signature accepts a `*ServiceInterface`
+or a service impl's dependency handle; a service impl passes its own
+dependency into a manager instead of the result it produced; a sequence
+that needs a service-level operation of another namespace is written
+inside a manager.
 
 **Severity.** medium
 
-## CON-15 A service shell translates, it does not decide
+## CON-15 A router translates, it does not decide
 
-**Principle.** A router function is three lines: resolve the context,
-call a manager, project the result onto a view. When a router grows a
-fourth line that decides something, the decision moves into a manager.
+**Principle.** A router builds the entity or the arguments from the
+request, calls one manager, and projects the result onto a view. When a
+router starts deciding something, the decision moves into a manager. A
+service impl may sequence calls across services and managers; it does
+not hold business rules either.
 
 **Source.** Section 10, Service Interfaces and Impls.
 
-**Look for.** Router and service impl bodies; conditionals, loops, and
-arithmetic inside them; direct storage access from a router.
+**Look for.** Router function bodies: any `if`, `for`, or arithmetic
+other than building request arguments and the view; direct storage
+access from a router; domain exceptions raised inside a router.
 
-**Violation.** A router validates business rules, computes a value, or
+**Violation.** A router validates a business rule, computes a value, or
 branches on entity state; a router composes several managers to enforce
-a rule the OM should own; a router calls storage directly.
+a rule the OM owns; a router calls storage directly; a router raises a
+domain exception on its own.
 
-**Severity.** high
+**Severity.** medium
 
 ## CON-16 Every process boots through the same container in the same order
 
@@ -308,5 +322,31 @@ app.
 worker assembles its dependencies by hand outside a container; `close()`
 tears down in construction order or skips a member; the test suite
 boots a different assembly than production.
+
+**Severity.** medium
+
+## CON-17 Every write authorizes, verifies, copies, writes
+
+**Principle.** Every write follows the same four steps: authorize,
+verify, copy, write. The caller that originates an entity constructs it
+whole, with `id=new_id()`, `created_at`, `updated_at`, and
+`created_by=ctx.user_id` set, and hands it to `create_*`. The manager
+sets `updated_at` on every update and `deleted_at` / `deleted_by` on a
+soft delete, always by copy. Mutating methods return the entity that
+was written.
+
+**Source.** Section 7, Shape of an Operation.
+
+**Look for.** Manager `create_*`, `update_*`, and `delete_*` bodies: the
+read that confirms existence and tenancy before an update, the
+`model_copy` that sets the timestamp, the return statement; the call
+site that constructs the entity handed to `create_*`.
+
+**Violation.** An update writes without first reading the entity back
+through the manager's own `get_*`; a manager fills in `id`,
+`created_at`, or `created_by` that the originating caller left unset;
+`updated_at` or `deleted_at` is set by the caller or by storage instead
+of by the manager; a mutating method returns `None` or a different
+snapshot than the one written.
 
 **Severity.** medium
