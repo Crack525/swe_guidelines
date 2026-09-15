@@ -32,10 +32,8 @@ try a checkout without installing:
 claude --plugin-dir /path/to/swe_guidelines
 ```
 
-Non-plugin use also works: clone the repository and copy or symlink the
-`skills/` folders you want into a project's `.claude/skills/`, keeping
-`lenses/` and `architecture.md` two levels above them, because the
-skills reference `${CLAUDE_SKILL_DIR}/../../`.
+Non-plugin use, version pinning, and the pointer file a project keeps
+in its own `specs/` folder are in [`docs/adopting.md`](docs/adopting.md).
 
 ## The skills
 
@@ -59,16 +57,12 @@ skills reference `${CLAUDE_SKILL_DIR}/../../`.
 | `arch-deviate`            | Records a deliberate deviation as an ADR in the consuming project            |
 
 Every review skill takes the same argument (empty for the current
-branch, a path, a git range, or `all`) and produces the same report
-shape, so reports from different groups merge cleanly. The review
-skills read and report; they never edit. The scaffold skills write
-into the working tree and never commit.
-
-## Adopt the guideline in a project
-
-See [`docs/adopting.md`](docs/adopting.md): a pointer file for the
-project's `specs/` folder, the plugin install, and a `make` target for
-projects that want the guideline text vendored at a pinned tag.
+branch, a path, a git range, or `all`). The seven group skills produce
+the same report shape, so their reports merge cleanly; the full review
+adds a per-group table. The review skills read and report; they never
+edit. The scaffold skills write into the working tree and never commit.
+The subagent tool the full review fans out with is called `Agent` in
+Claude Code 2.1 and later.
 
 ## Develop
 

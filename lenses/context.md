@@ -1,4 +1,4 @@
-# Context, Authorization, and Tenancy
+# Context
 
 Group id: `context`. Covers Section 5 (OpContext, The Operator
 Context), the authorization and tenancy split of Section 6, the

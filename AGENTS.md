@@ -18,7 +18,10 @@ lenses (`skills/`), and the checkers that keep the three consistent
   `make gen-skills`. The other skills are hand-written and share
   `skills/_shared/scaffold-conventions.md`.
 - `agents/arch-reviewer.md` is the subagent `arch-review-full` fans out
-  to.
+  to. Its procedure and report shape mirror the review template by
+  hand; a change to one is a change to both. The sentence "Never
+  edit, stage, or commit" is repeated in every review skill on
+  purpose.
 - `.claude-plugin/` holds the plugin and marketplace manifests. The
   repository root is the plugin.
 
@@ -31,7 +34,11 @@ lenses (`skills/`), and the checkers that keep the three consistent
 - No em-dashes anywhere.
 - Every lens cites a section and subsection that exist.
 - Every skill's `name` equals its folder name and starts with `arch-`;
-  every `${CLAUDE_SKILL_DIR}/...` reference resolves.
+  every `${CLAUDE_SKILL_DIR}/...` reference resolves; descriptions are
+  double-quoted; `allowed-tools` is comma-separated in the
+  `Bash(cmd:*)` form and names only what the skill runs.
+- Scaffold skills share `skills/_shared/scaffold-conventions.md` and
+  have the same sections: Input, Created, Changed, Procedure, Output.
 - Exactly one review skill per lens group; `arch-review-full` names all
   of them.
 

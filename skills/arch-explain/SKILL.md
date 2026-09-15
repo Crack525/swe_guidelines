@@ -1,7 +1,7 @@
 ---
 name: arch-explain
-description: Explain how the Software Design and Architecture Guidelines apply to a question, a file, or a proposed change, citing the sections and lenses that govern it. Use when onboarding, before a cross-layer change, or when unsure where a piece of code belongs.
-allowed-tools: Read Grep Glob
+description: "Explain how the Software Design and Architecture Guidelines apply to a question, a file, or a proposed change, citing the sections and lenses that govern it. Use when onboarding, before a cross-layer change, or when unsure where a piece of code belongs."
+allowed-tools: Read, Grep, Glob
 ---
 
 # arch-explain
@@ -9,7 +9,8 @@ allowed-tools: Read Grep Glob
 Answer a question about the architecture with the guideline as the
 source of truth, not with general opinion. The guideline is at
 `${CLAUDE_SKILL_DIR}/../../architecture.md` and the lens catalog at
-`${CLAUDE_SKILL_DIR}/../../lenses/`.
+`${CLAUDE_SKILL_DIR}/../../lenses/`. If either is missing, stop and
+say the installation is incomplete.
 
 ## Input
 
@@ -34,9 +35,13 @@ two sentences each, then the seven lens groups in one line each.
 3. Find the lenses that a reviewer would apply. Name them by id.
 4. When the input is a path, open the code and say, for each rule that
    applies, whether the code follows it, in one line each. Do not run
-   a full review; point at `arch-review-<group>` for that.
+   a full review; point at `arch-review-<group>`
+   (`/swe-guidelines:arch-review-<group>` when installed as the plugin)
+   for that.
 5. When the input is a change, say which layer each part belongs to,
    which section shapes it, and which scaffold skill starts it.
+6. When the guideline is silent on the question, say so and name the
+   nearest section. Do not opine beyond the text.
 
 ## Output
 

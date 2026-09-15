@@ -10,6 +10,9 @@ Rules:
 - there is exactly one arch-review-<group> skill per lens group and none for
   a group that does not exist;
 - arch-review-full names every group's review skill;
+- allowed-tools is comma-separated, each entry `Name` or `Name(rule)`, Bash rules
+  in the `Bash(cmd:*)` prefix form;
+- frontmatter values containing ": " are double-quoted so strict YAML loaders accept them;
 - no em-dashes.
 
 Exit status is non-zero on any failure. Standard library only.
@@ -28,17 +31,34 @@ NAME = re.compile(r"^arch-[a-z0-9-]+$")
 FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 REF = re.compile(r"\$\{CLAUDE_SKILL_DIR\}/([^\s`'\")]+)")
 TABLE_ROW = re.compile(r"^\|\s*`([a-z]+)`\s*\|")
+TOOL = re.compile(r"^[A-Za-z]+(\([^()]*\))?$")
 
 
-def frontmatter(text: str) -> dict[str, str]:
+def frontmatter(text: str, errors: list[str], rel: str) -> dict[str, str]:
+    """Parse the flat `key: value` frontmatter strictly enough for any YAML loader.
+
+    A value that contains ": " must be a complete double-quoted string;
+    otherwise a strict YAML parser refuses the file.
+    """
     m = FRONTMATTER.match(text)
     if not m:
         return {}
     out: dict[str, str] = {}
     for line in m.group(1).splitlines():
-        if ":" in line and not line.startswith(" "):
-            key, _, value = line.partition(":")
-            out[key.strip()] = value.strip()
+        if not line.strip() or line.startswith(" "):
+            continue
+        key, sep, value = line.partition(":")
+        if not sep:
+            errors.append(f"{rel}: frontmatter line without a colon: {line!r}")
+            continue
+        key, value = key.strip(), value.strip()
+        if value.startswith('"'):
+            if not (value.endswith('"') and len(value) >= 2):
+                errors.append(f"{rel}: unterminated quoted value for {key}")
+            value = value[1:-1]
+        elif ": " in value or value[:1] in ("'", "[", "{", "&", "*", "!", "|", ">", "%", "@", "`"):
+            errors.append(f"{rel}: value of {key} must be double-quoted for strict YAML")
+        out[key] = value
     return out
 
 
@@ -63,7 +83,7 @@ def main() -> int:
             errors.append(f"{folder.relative_to(ROOT)}: no SKILL.md")
             continue
         text = skill.read_text(encoding="utf-8")
-        fm = frontmatter(text)
+        fm = frontmatter(text, errors, str(rel))
         if not fm:
             errors.append(f"{rel}: missing frontmatter")
             continue
@@ -79,7 +99,18 @@ def main() -> int:
             errors.append(f"{rel}: description is {len(desc)} characters, limit 1024")
         if "—" in text:
             errors.append(f"{rel}: em-dash")
+        tools = fm.get("allowed-tools", "")
+        if tools:
+            if " " in tools and "," not in tools:
+                errors.append(f"{rel}: allowed-tools must be comma-separated")
+            for tool in (t.strip() for t in tools.split(",")):
+                if not TOOL.match(tool):
+                    errors.append(f"{rel}: allowed-tools entry {tool!r} is not Name or Name(rule)")
+                if tool.startswith("Bash(") and " *" in tool:
+                    errors.append(f"{rel}: use the Bash(cmd:*) prefix form, not {tool!r}")
         for ref in REF.findall(text):
+            if "<" in ref:
+                continue  # a placeholder such as arch-review-<group>
             target = (folder / ref).resolve()
             if not target.exists():
                 errors.append(f"{rel}: reference ${{CLAUDE_SKILL_DIR}}/{ref} does not exist")

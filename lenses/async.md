@@ -1,4 +1,4 @@
-# Async: Infrastructure, Queues, and Workers
+# Async
 
 Group id: `async`. Covers Section 9 (Infrastructure), Section 10
 (Idempotency on the Consumer Side, Long-Running Orchestrations), and
