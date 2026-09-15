@@ -1,0 +1,573 @@
+# Delivery
+
+Group id: `delivery`. Covers Sections 12 (Apps as Products, Apps Are
+Dumb), 13, 14, 15 (except the realtime channel rule), and 16 (except
+The App Container) of `architecture.md`.
+
+This group judges how the system reaches people and machines: the
+apps at the edge, the repository they are built from, the environments
+they run in, and the conventions every process shares for errors,
+logs, telemetry, and configuration. It leaves the realtime channel
+rules (one channel per app, envelopes, degraded mode) to `network`,
+the app container boot order to `contracts`, and the credential and
+operator-gate rules behind the operator console to `context`.
+
+## DEL-01 Apps are dumb
+
+**Principle.** Only UI rendering, local input handling, and
+device-specific behavior live in an app. Business logic and
+cross-service orchestration belong on the server.
+
+**Source.** Section 12, Apps Are Dumb.
+
+**Look for.** App source under `apps/`: component files, hooks, CLI
+command bodies, anything that computes a business outcome, validates a
+domain rule, or sequences calls to more than one service.
+
+**Violation.** A component or command that decides eligibility,
+totals, state transitions, or permissions; an app that calls two
+backend operations and combines their results to reach a business
+conclusion; domain constants duplicated into the app.
+
+**Severity.** high
+
+## DEL-02 App-only logic moves to the app's service, shared logic lower
+
+**Principle.** Logic meaningful to one app moves into that app's
+app-specific service, not into the app. Logic meaningful to more than
+one app moves into a domain service or the OM.
+
+**Source.** Section 12, Apps Are Dumb.
+
+**Look for.** New logic added to an app alongside an existing
+app-specific service; the same rule implemented in two apps; a domain
+rule living in an app-specific service that another app would need.
+
+**Violation.** The portal and the CLI each implement the same
+aggregation; an app-specific service holds a rule a second app later
+copies; an app grows a module of "helpers" that reason about the
+domain.
+
+**Severity.** medium
+
+## DEL-03 The cloud is AWS, and environments differ only by variables
+
+**Principle.** Cloud deployments target AWS. Every environment has the
+same module graph; everything that differs between two environments is
+a variable, so the smaller environment predicts production with
+nothing more than scale changes.
+
+**Source.** Section 13, Cloud: AWS.
+
+**Look for.** `deployment/terraform/environments/*`: the set of modules
+each environment instantiates and the variables it passes; resources
+that exist in one environment and not another.
+
+**Violation.** A module, resource, or wiring present only in
+production; environment-specific branches in module code instead of
+variables; a service that runs only in the smaller environment.
+
+**Severity.** medium
+
+## DEL-04 Production promotes images by digest
+
+**Principle.** Production does not rebuild. It promotes the images the
+smaller environment already ran, by digest, behind an approval gate.
+
+**Source.** Section 13, Cloud: AWS.
+
+**Look for.** The deploy workflow: how the production job obtains its
+images, whether it references a digest or rebuilds from source, and
+whether an approval step guards it.
+
+**Violation.** A production job that runs a build; a production task
+definition pinned to a tag rather than a digest; a promotion path with
+no approval gate.
+
+**Severity.** medium
+
+## DEL-05 Every cloud resource is declared in Terraform, in the monorepo
+
+**Principle.** Networks, services, databases, topics, buckets, and IAM
+are all defined in Terraform that lives in the same monorepo. An
+environment change is a pull request. Formatting and validation of
+every environment run in CI.
+
+**Source.** Section 13, Infrastructure as Code.
+
+**Look for.** `deployment/terraform/` coverage of every resource the
+application names in its settings; the CI workflow's Terraform jobs
+(`fmt -check`, `validate`) across every environment.
+
+**Violation.** A resource referenced by settings or runbooks that no
+Terraform file declares; a runbook step that says "create in the
+console"; a CI pipeline that validates one environment and not the
+others.
+
+**Severity.** high
+
+## DEL-06 Dependencies in local containers, the application on the host
+
+**Principle.** Every technology dependency runs as a local container
+through one compose stack, using cloud images or wire-compatible
+stand-ins. Application processes run on the host, started by one
+script; a second compose file runs the application containers when the
+real images are needed. Developer dashboards are an optional profile
+nothing in CI depends on.
+
+**Source.** Section 13, Local: Docker Compose.
+
+**Look for.** `deployment/local/docker-compose.yml` and its full
+variant; the start script; the profile that holds dashboards; CI jobs
+that reference compose services.
+
+**Violation.** A dependency the application needs that the compose
+stack does not run; application services baked into the default
+compose file so a code change needs an image rebuild; a CI job that
+depends on a dashboard container.
+
+**Severity.** medium
+
+## DEL-07 External services have a twin behind the same interface
+
+**Principle.** A hosted external service has one interface and at
+least two impls: the real client and a deterministic twin with the same
+wire shapes that signs its own synthetic deliveries. Tests, the local
+stack, and CI run against the twin; the real client is proven against
+fixtures and a separate non-gating sandbox workflow. A twin refuses to
+run outside a local environment, and every record it produces names
+its provenance. This is a strong suggestion; the list of untwinned
+services is kept short.
+
+**Source.** Section 13, Twins for External Services.
+
+**Look for.** `integrations/` and provider selection in settings: one
+interface per external service, the impls behind it, provenance fields
+on records the provider produces, the guard that refuses a twin off
+loopback, the workflow that exercises real clients.
+
+**Violation.** A test suite that needs a live account or network to
+pass; a twin that can be selected in a production-named environment;
+records from a twin indistinguishable from real ones; a gating CI job
+that calls a sandbox.
+
+**Severity.** medium
+
+## DEL-08 Unsafe settings are refused at boot
+
+**Principle.** A settings combination that is only safe locally is
+refused by the process at boot with a message naming the setting, not
+by a deployment checklist. A boot that succeeds logs one line naming
+every backend it chose.
+
+**Source.** Section 13, What a Process Refuses.
+
+**Look for.** Boot code and settings validation: checks pairing the
+environment name with the secrets backend, twin selection with the
+origin, a worker's registration with its expected tenant; the start-up
+inventory log line.
+
+**Violation.** A production-named environment that can start on the
+file secrets backend; a twin selectable off a loopback origin without
+an explicit override; a boot with no line saying which backends are in
+use; a runbook that carries a check the process could make itself.
+
+**Severity.** high
+
+## DEL-09 The monorepo is grouped by role
+
+**Principle.** The repository root groups code by role: `om/`,
+`infra/`, `integrations/`, `services/`, `workers/`, `apps/`,
+`clients/`, `deployment/`, `scripts/`, `docs/`. A system that starts
+as one API process has one entry under `services/` and grows the rest.
+
+**Source.** Section 14, Monorepo Folder Structure.
+
+**Look for.** The top-level tree and where a new package was placed; a
+service or worker outside its role folder; domain code outside `om/`.
+
+**Violation.** A worker under `services/`; a second object model
+package next to `om/`; a `utils/` or `common/` package at the root
+that holds domain types; application code under `deployment/` or
+`scripts/`.
+
+**Severity.** medium
+
+## DEL-10 Src layout with tests as a sibling
+
+**Principle.** Every Python distribution uses the `src/<root>/...`
+layout, and tests live in a `tests/` sibling, so the test runner
+exercises the installed package.
+
+**Source.** Section 14, Layout Conventions.
+
+**Look for.** Each distribution's `pyproject.toml`, `src/` and
+`tests/` directories; test imports that resolve to the source tree
+instead of the installed package.
+
+**Violation.** A package at the distribution root without `src/`;
+tests inside the package; a `conftest.py` that inserts the source tree
+on `sys.path`.
+
+**Severity.** low
+
+## DEL-11 The OM is one distribution and owns its migrations
+
+**Principle.** The OM is a single distribution covering every
+namespace; namespaces are folders inside it. Migrations live with the
+OM, and the schema timeline is owned by the OM, not by any service.
+
+**Source.** Section 14, Layout Conventions.
+
+**Look for.** The number of distributions under `om/`; where
+`migrations/` sits; whether any service package carries its own
+migration files.
+
+**Violation.** A per-namespace OM package; a migration folder under a
+service or worker; two packages that both define entities.
+
+**Severity.** medium
+
+## DEL-12 Workers and services share one project shape
+
+**Principle.** Workers and services share `pyproject.toml`, `src/`,
+`tests/`, and a `main.py` behind a console entry point. Workers have no
+`routers/` or `types/`; services do. A service binary is also its own
+operations CLI (`serve`, `migrate`, `bootstrap`, `openapi`).
+
+**Source.** Section 14, Layout Conventions.
+
+**Look for.** The layout of each entry under `services/` and
+`workers/`; the `[project.scripts]` entry point; the subcommands its
+`main.py` exposes.
+
+**Violation.** A worker with a routers module; a service whose
+migration or bootstrap logic lives in a separate script rather than a
+subcommand of its own binary; a distribution with no console entry
+point.
+
+**Severity.** low
+
+## DEL-13 Dockerfiles are central, two-stage, non-root, with a healthcheck
+
+**Principle.** Dockerfiles live together under `deployment/docker/`,
+one per image, sharing an entrypoint. An image builds in two stages,
+installs one workspace package with locked dependencies, runs as a
+non-root user, and declares a healthcheck against `/healthz`.
+
+**Source.** Section 14, Layout Conventions.
+
+**Look for.** `deployment/docker/*.Dockerfile`: stages, the install
+command and lock file, the `USER` instruction, the `HEALTHCHECK`
+instruction, the shared entrypoint.
+
+**Violation.** A Dockerfile inside a service folder; a single-stage
+image carrying build tooling; a process running as root; an image
+without a healthcheck; an install that ignores the lock file.
+
+**Severity.** medium
+
+## DEL-14 Workspace tooling at the root, `make check` as the fast gate
+
+**Principle.** One `pyproject.toml` declares the uv workspace and one
+`package.json` with `pnpm-workspace.yaml` declares the TypeScript
+members. Lint, format, and type-check config live at the root.
+`make check` runs lint, format, types, and unit tests; CI runs it plus
+the integration, migration, image, and infrastructure jobs.
+
+**Source.** Section 14, Layout Conventions.
+
+**Look for.** Root config files and the `check` target; per-package
+lint or type configs that diverge from the root; CI jobs beyond the
+fast gate.
+
+**Violation.** A package with its own lint rules that contradict the
+root's; a `check` target that skips types or format; CI that runs only
+the fast gate and never the integration or migration jobs.
+
+**Severity.** low
+
+## DEL-15 A product-specific root package name
+
+**Principle.** The root Python package is named for the product. The
+layout is what matters, not the word.
+
+**Source.** Section 14, Layout Conventions.
+
+**Look for.** The top-level package under each `src/`.
+
+**Violation.** A root package whose name shadows a standard-library
+module; different distributions in the same workspace using different
+root package names.
+
+**Severity.** low
+
+## DEL-16 React + TypeScript on Vite for browsers; Python for the CLI
+
+**Principle.** Every browser app is React + TypeScript built with
+Vite into a static SPA. The operator console is a second application
+on the same stack. The CLI is Python.
+
+**Source.** Section 15, Stack.
+
+**Look for.** `apps/*/package.json` and build config; a browser app
+introduced on a different framework or toolchain; the CLI's language.
+
+**Violation.** A second frontend framework or bundler in the
+workspace; a browser app with server-side rendering or API routes in
+its toolchain; a CLI rewritten outside Python.
+
+**Severity.** medium
+
+## DEL-17 Client rendering only; a static bundle
+
+**Principle.** Rendering happens in the client only. The deployed
+artifact is a static bundle whose only network surfaces are the
+gateway and the realtime channel.
+
+**Source.** Section 15, Client Rendering.
+
+**Look for.** The build output and how it is served; any server
+runtime deployed alongside the bundle; network calls to hosts other
+than the gateway.
+
+**Violation.** A rendering server in the app's deployment; a bundle
+that calls a third-party API directly for domain data; two
+data-fetching paths (server and client) for the same screen.
+
+**Severity.** medium
+
+## DEL-18 TanStack Query for server state, Zustand for client state
+
+**Principle.** Server state lives in TanStack Query with one query-key
+factory per domain. Client state lives in Zustand. Realtime envelopes
+write into the query cache, never directly into components.
+
+**Source.** Section 15, State and Data.
+
+**Look for.** `src/queries/` and the key factory; store modules;
+realtime handlers and what they write to; server data held in stores
+or component state.
+
+**Violation.** Server data copied into a store and kept in sync by
+hand; query keys spelled inline in several places; a realtime handler
+that sets component state or calls a component callback; a third state
+library.
+
+**Severity.** medium
+
+## DEL-19 Views render, view-model hooks decide, model modules compute
+
+**Principle.** Each screen has a pure Model module (row builders,
+codecs, formatting, predicates; no React), a View-Model hook that
+combines queries, mutations, stores, and the model, and a View that
+renders. Components contain no fetches, mutations, or business
+decisions. The model module is the unit of testability.
+
+**Source.** Section 15, Views, View-Models, Models.
+
+**Look for.** Per-screen folders under `src/features/`: the presence
+of a model module with tests, a view-model hook, and components that
+only consume the hook.
+
+**Violation.** A component that calls a query or mutation hook
+directly; a predicate or formatter defined inside a component file; a
+screen with no model module and untested decision logic in the hook.
+
+**Severity.** medium
+
+## DEL-20 Generated types behind a facade; one transport client
+
+**Principle.** Types are generated from the committed OpenAPI document
+into one file and re-exported through a curated facade. One small
+hand-written client owns transport: bearer and app header, error
+envelope parsed into a typed error with the request id, sign-out on
+401. Feature code never calls `fetch`.
+
+**Source.** Section 15, API Access.
+
+**Look for.** `src/api/`: the generated file, the facade, the client;
+imports of the generated path from feature code; direct `fetch` calls.
+
+**Violation.** A feature module importing from the generated schema
+file; a second HTTP client; hand-maintained request or response types
+that duplicate generated ones; `fetch` outside the client.
+
+**Severity.** medium
+
+## DEL-21 The operator console shares the stack, never the security context
+
+**Principle.** The operator console is a separate application sharing
+the portal's stack, design tokens, component kit, sign-in flow, and API
+client. It has its own origin, bundle, and routes under `/v1/admin/*`,
+holds no realtime socket, and derives authority from the operator
+allowlist, not from a tenant role or a portal flag.
+
+**Source.** Section 15, The Operator Console.
+
+**Look for.** `apps/admin/`: its origin configuration, route prefix,
+absence of a socket provider, and how it decides who may enter;
+operator screens inside the portal.
+
+**Violation.** Operator pages in the portal behind a flag or role
+check; the console opening the realtime channel; the console served
+from the portal's origin; a design kit forked instead of shared.
+
+**Severity.** high
+
+## DEL-22 The CLI is a thin REST client with exit codes
+
+**Principle.** The CLI talks REST with an API key, attaches an
+idempotency key to every creating call, turns the outcome of a
+followed operation into an exit code, and trusts the operating
+system's certificate store.
+
+**Source.** Section 15, The CLI Is Different.
+
+**Look for.** The CLI's HTTP client setup, creating commands and their
+headers, the follow loop and its exit code, TLS configuration.
+
+**Violation.** A creating command without an idempotency key; a
+follow that exits zero on failure; a bundled certificate store that
+ignores the OS's; domain logic implemented in a command body.
+
+**Severity.** medium
+
+## DEL-23 Exceptions carry status and code; one boundary translates
+
+**Principle.** Every platform exception is rooted at
+`PlatformException`, which carries `http_status` and a stable `code`.
+Shape exceptions (`NotFound`, `Conflict`, `ValidationFailed`,
+`NotAuthorized`) cover most cases; a namespace family multiply-inherits
+a shape. Translation to HTTP happens once, at the boundary. Managers
+never format HTTP.
+
+**Source.** Section 16, Exceptions.
+
+**Look for.** `om/exceptions.py`; exception classes defined elsewhere;
+`raise` sites in managers; the boundary handler; status codes set in
+routers.
+
+**Violation.** An exception not rooted at `PlatformException`; a
+manager raising a framework HTTP exception; a router mapping exception
+types to status codes; a domain exception without a shape and so
+surfacing as 500.
+
+**Severity.** high
+
+## DEL-24 Standard logging, configured once, correlated by filter
+
+**Principle.** Every module logs through `logging.getLogger(__name__)`.
+Formatting, level, and sink are configured once at boot, JSON in cloud
+and readable locally. Correlation fields reach every line through a
+filter reading a context variable set where the context is built.
+
+**Source.** Section 16, Logs.
+
+**Look for.** Logging setup in the boot path; per-module logger
+creation; any second logging library; how the request id reaches log
+records.
+
+**Violation.** A module configuring handlers or levels; a third-party
+logging library; `print` for operational output; the request id
+passed by hand into log calls or absent from them.
+
+**Severity.** medium
+
+## DEL-25 OpenTelemetry traces and Prometheus metrics, used directly
+
+**Principle.** Traces use OpenTelemetry directly; the tracer provider
+is configured only when an endpoint is set, otherwise the no-op tracer
+runs. Metrics are exposed on `/metrics` in Prometheus format through
+the client library directly. Neither is wrapped in a platform
+interface.
+
+**Source.** Section 16, Traces and Metrics.
+
+**Look for.** Tracing and metrics setup; a platform module that
+re-exposes spans, counters, or histograms under its own names; code
+paths that branch on whether tracing is configured.
+
+**Violation.** A `PlatformTracer` or `MetricsInterface` wrapper; a
+second metrics system; code that skips instrumentation when no
+exporter is set instead of relying on the no-op tracer; a request
+counter missing the route template or status label.
+
+**Severity.** low
+
+## DEL-26 One settings object per process; nothing below reads the environment
+
+**Principle.** Configuration is read once at boot into one settings
+object from environment variables under one product prefix, with an
+optional `.env` and a committed `.env.example` documenting every knob.
+Backends are selected there and nowhere else. Managers and service
+impls receive handles and options through constructors.
+
+**Source.** Section 16, Configuration.
+
+**Look for.** The settings class and its prefix; `.env.example`
+coverage; `os.environ` or `getenv` reads outside the settings and boot
+modules.
+
+**Violation.** An environment read inside a manager, storage, or
+router; a knob missing from `.env.example`; a second prefix; backend
+selection performed outside the settings and boot path.
+
+**Severity.** high
+
+## DEL-27 Product variation is a modelled entity, not a flag
+
+**Principle.** Runtime variation that belongs to the product (what a
+tenant may do, what a plan allows) is a modelled entity with a manager
+and storage. A feature flag, when needed, is a vendor SDK used
+directly with its client injected at boot.
+
+**Source.** Section 16, Configuration.
+
+**Look for.** Where per-tenant or per-plan behavior is decided; flag
+checks in managers; a home-grown flag abstraction.
+
+**Violation.** A tenant entitlement expressed as a flag or an
+environment variable; a platform wrapper around a flag SDK; a flag
+client constructed inside a manager.
+
+**Severity.** medium
+
+## DEL-28 Constraining decisions are ADRs, cited by number
+
+**Principle.** A decision that constrains future work is recorded under
+`docs/adr/` with context, decision, and consequences, dated and
+numbered. Code and comments cite the ADR by number.
+`docs/architecture.md` describes the system as built.
+
+**Source.** Section 16, Records of Decisions.
+
+**Look for.** A change that introduces or removes an invariant,
+boundary, or exception to a rule; whether an ADR accompanies it;
+whether the code that embodies it cites the number.
+
+**Violation.** An exception to a guideline rule introduced with no
+ADR; an ADR referenced nowhere in code; `docs/architecture.md` left
+describing a shape the change removed.
+
+**Severity.** medium
+
+## DEL-29 Checkable rules are checked by tests
+
+**Principle.** A rule that a program can check is checked: every table
+has a role and no key crosses one, storage methods take `org_id` first
+except the enumerated exceptions, no manager imports a service, the
+migration chain has one head per role. A rule that fails the build
+holds.
+
+**Source.** Section 16, Records of Decisions.
+
+**Look for.** Conformance tests in the unit suite; a new rule or
+exception introduced without a test that asserts it; a rule stated in
+docs that a test could enforce and does not.
+
+**Violation.** A new storage exception not added to the enumerated
+list a test checks; an import-direction rule with no test; a role map
+whose completeness nothing asserts.
+
+**Severity.** medium

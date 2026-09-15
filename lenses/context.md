@@ -1,0 +1,369 @@
+# Context, Authorization, and Tenancy
+
+Group id: `context`. Covers Section 5 (OpContext, The Operator
+Context), the authorization and tenancy split of Section 6, the
+authorization step and parameter order of Section 7 and its
+"Operations Without a Principal", the tenancy rules of Section 8, the
+tenant keying of Section 9, the credential and operator concerns of the
+gateway in Section 10, and the worker context provenance of Section 11.
+
+This group judges one question: does every operation know who is
+acting, for which tenant, with what authority, and is that knowledge
+carried and enforced in the right layer. It leaves interface shape and
+injection to `contracts`, table and translation mechanics to `storage`,
+queue and worker loop mechanics to `async`, and the error envelope,
+rate limits, and public types to `network`.
+
+## CTX-01 Context is the first argument of every operation
+
+**Principle.** Every operation on a manager, storage-facing service, or
+worker handler takes a context as its first argument. By the time a
+manager runs, the context is fully built.
+
+**Source.** Section 5, OpContext; Section 7, The Business Layer.
+
+**Look for.** Manager interfaces, service interfaces, worker handlers:
+the first parameter of every async method.
+
+**Violation.** A manager or service method that takes a user id, an
+org id, or a token instead of a context; a method that takes the
+context in any position other than first; a handler that fetches
+identity from a request object.
+
+**Severity.** high
+
+## CTX-02 The context carries identity, tenant, role, permissions, app, and request
+
+**Principle.** The security context holds the user, the organization,
+the role, the permissions, the teams, and the credential kind; the app
+context holds the app type and version; the context holds the request
+id and an optional trace id.
+
+**Source.** Section 5, OpContext.
+
+**Look for.** The context type definitions and every place that reads
+identity, tenant, or app information.
+
+**Violation.** Identity or tenant data passed beside the context as
+extra parameters; a second ad-hoc "current user" object; app type
+derived from headers below the gateway; a request id threaded by hand.
+
+**Severity.** medium
+
+## CTX-03 Permissions are a pure function of role, and a credential never outranks its issuer
+
+**Principle.** Permissions derive from role through one table in the
+tenancy namespace. A credential issued by a principal carries a role no
+higher than the issuer's.
+
+**Source.** Section 5, OpContext.
+
+**Look for.** The role-to-permission table, credential issuing paths
+(API keys, invitations, session tokens), and any code that assigns
+permissions.
+
+**Violation.** Permissions stored per user or per credential
+independently of role; a second mapping elsewhere; an issuing path that
+does not cap the new credential's role at the issuer's role.
+
+**Severity.** high
+
+## CTX-04 Teams are the second authorization axis
+
+**Principle.** Inside a tenant, an entity may be owned by a team, and
+visibility rules consult the context's team membership.
+
+**Source.** Section 5, OpContext.
+
+**Look for.** Entities with a team owner; visibility and listing rules
+in managers; the `in_team` check.
+
+**Violation.** A team-owned entity listed or read without a team check;
+team membership resolved by a manager from storage on every call
+instead of read from the context; team checks in a router or a storage
+impl.
+
+**Severity.** medium
+
+## CTX-05 The context is built only at the three entry points
+
+**Principle.** A context is constructed by the gateway on request
+arrival, by a worker when it claims a unit of work, and by the
+bootstrap that seeds an environment. Nothing else constructs one.
+
+**Source.** Section 5, OpContext; Section 10, The Gateway; Section 11,
+The Work Queue.
+
+**Look for.** Every construction site of the context type and its
+sub-objects.
+
+**Violation.** A manager, storage impl, or test helper used in
+production code that builds a context; a router that assembles a
+context from headers or tokens; a service that constructs one for an
+internal call.
+
+**Severity.** high
+
+## CTX-06 The context is immutable and narrowing is an explicit argument
+
+**Principle.** Once built, the context flows through every downstream
+call unchanged. A narrower view (an override, a reduced permission set)
+is passed as an explicit argument, never by mutating or copying the
+context mid-request.
+
+**Source.** Section 5, OpContext.
+
+**Look for.** Copies or mutations of the context after the gateway;
+methods that accept a context and hand a different one downstream.
+
+**Violation.** A context copied with altered fields inside a manager or
+service; a permission set widened or narrowed on the context; a "with
+override" helper that replaces the context instead of adding a
+parameter.
+
+**Severity.** high
+
+## CTX-07 No ambient state outside the context
+
+**Principle.** Operations never reach for ambient state through globals,
+thread locals, or hidden lookups. Everything ambient flows through the
+context.
+
+**Source.** Section 5, OpContext; Section 9, Principles.
+
+**Look for.** Module-level globals holding a current user, tenant, or
+request; thread-local or context-variable reads in managers, storage,
+or workers; infra handles fetched from a global registry.
+
+**Violation.** A manager reading the current tenant from a context
+variable; a storage impl reading a global "current org"; an infra
+handle looked up rather than injected. The one allowed context variable
+carries the request id for log enrichment only, and the authoritative
+value stays on the context.
+
+**Severity.** high
+
+## CTX-08 Authorization lives in managers
+
+**Principle.** Permissions and visibility are business decisions.
+Every mutating manager operation starts by requiring the permission it
+needs; visibility rules sit next to the operation they guard.
+Routers translate and storage persists; neither decides authorization.
+
+**Source.** Section 6, Separation of Layers; Section 7, Shape of an
+Operation.
+
+**Look for.** The first lines of manager write methods; permission
+checks in routers, service impls, and storage impls.
+
+**Violation.** A manager write path with no permission requirement; a
+permission check performed in a router or a request dependency and
+absent from the manager; a storage impl that inspects role or
+permissions.
+
+**Severity.** high
+
+## CTX-09 Tenancy is enforced in storage on read and checked on write
+
+**Principle.** Tenancy is a data boundary. Every storage query filters
+by the tenant, and every write refuses to overwrite a row that belongs
+to another tenant.
+
+**Source.** Section 6, Separation of Layers; Section 8, Principles; A
+Storage Impl.
+
+**Look for.** Every query in every storage impl, including the
+in-memory one; the shared upsert primitive.
+
+**Violation.** A query without the tenant in its filter; a write that
+updates by id alone; an upsert that silently moves a row from one
+tenant to another; a memory impl that skips the tenant check the
+relational impl performs.
+
+**Severity.** high
+
+## CTX-10 Tenant first, then user, then the narrowing ids
+
+**Principle.** Storage and service signatures start with the tenant id,
+add the user id when the scope is personal to a user, and then peel
+scope from broad to narrow. Manager signatures start at the level below
+the context, since tenant and user are already in it.
+
+**Source.** Section 7, Parameters; Section 8, Namespace Shape.
+
+**Look for.** Parameter order on storage, manager, and service
+interfaces; user-scoped storages.
+
+**Violation.** A storage method taking the entity id before the tenant
+id; a user-scoped read that takes only the tenant and filters by user
+inside the impl, or takes no user at all; a manager method that takes
+an org id or user id the context already carries.
+
+**Severity.** medium
+
+## CTX-11 Both keys appear in every user-scoped query
+
+**Principle.** When a scope is personal to a user within a tenant, the
+interface takes both `org_id` and `user_id`, and both appear in the
+`WHERE` clause of every query in the impl.
+
+**Source.** Section 8, Namespace Shape.
+
+**Look for.** Impls behind user-scoped storage interfaces.
+
+**Violation.** A user-scoped query that filters by user but not tenant,
+or by tenant but not user; a personal view readable by another user in
+the same tenant.
+
+**Severity.** high
+
+## CTX-12 Exceptions to tenant-first are enumerated and tested
+
+**Principle.** Global tables and cross-tenant sweeps are the documented
+exceptions to the tenant-first rule. Global methods take no tenant and
+say why in their docstring; sweeps return the tenant with each row as
+`tuple[UUID, Entity]`; a test enumerates the exceptions.
+
+**Source.** Section 8, Namespace Shape.
+
+**Look for.** Storage methods without a tenant parameter; the test that
+lists them.
+
+**Violation.** A tenant-less storage method with no docstring
+justifying it; a sweep that returns entities without their tenant; a
+new tenant-less method that the enumerating test does not know about;
+no such test at all.
+
+**Severity.** medium
+
+## CTX-13 The system scope is EMPTY_UUID
+
+**Principle.** Cross-tenant reference data uses `EMPTY_UUID` as the
+tenant on cache and bucket calls, so system keys and tenant keys live in
+disjoint namespaces.
+
+**Source.** Section 2, Identifiers; Section 9, Principles.
+
+**Look for.** Cache and bucket calls for platform-owned data;
+unauthenticated rate-limit subjects.
+
+**Violation.** Platform-owned data cached or stored under a real
+tenant's id; a made-up sentinel other than `EMPTY_UUID`; an impl that
+treats the system scope like any tenant and lets a tenant caller reach
+it.
+
+**Severity.** medium
+
+## CTX-14 Topic payloads carry the tenant
+
+**Principle.** Every topic payload carries `org_id`, so a consumer can
+filter by tenant before it acts.
+
+**Source.** Section 9, Principles; Topics.
+
+**Look for.** The payload base class, every payload class, and every
+subscriber handler.
+
+**Violation.** A payload without a tenant field; a subscriber that
+acts on an event without comparing the payload's tenant to its own
+scope.
+
+**Severity.** high
+
+## CTX-15 Principal-less operations produce a context
+
+**Principle.** The few operations that exist before a principal does
+(claiming work, sweeping every tenant, resolving an inbound webhook
+token) are declared without a context, documented as platform-internal,
+and produce the context under which the work then runs.
+
+**Source.** Section 7, Operations Without a Principal; Section 11, The
+Work Queue.
+
+**Look for.** Manager methods without a context parameter; what they
+return; their docstrings.
+
+**Violation.** A context-less method that performs tenant work
+directly instead of returning a context; an undocumented context-less
+method; a growing set of such methods used as a convenience to skip
+authorization.
+
+**Severity.** high
+
+## CTX-16 A worker runs under the enqueuer's identity with a service role
+
+**Principle.** When a worker claims a work item, it rebuilds the
+enqueuer's principal from the item's `created_by` under a service role.
+Cross-tenant sweeps obtain one service context per live tenant from the
+tenancy manager.
+
+**Source.** Section 11, The Work Queue; Section 7, Operations Without a
+Principal.
+
+**Look for.** The worker's claim path and how it obtains a context;
+sweep code.
+
+**Violation.** A worker running every item under one shared machine
+principal so attribution is lost; a worker inventing a context with a
+made-up user; a sweep acting across tenants under one tenant's context
+or with no tenant at all.
+
+**Severity.** high
+
+## CTX-17 The credential prefix decides who accepts it
+
+**Principle.** Each credential kind has a distinct prefix, and the
+prefix decides which gateway dependency accepts it. A machine caller's
+key is membership-scoped, expiring, and role-capped; a person's login
+credential carries no tenant and is exchanged for a tenant-scoped
+session token.
+
+**Source.** Section 10, The Gateway.
+
+**Look for.** Credential formats, the dependencies that parse them,
+which routes accept which kind.
+
+**Violation.** One dependency that accepts any bearer on any route; a
+login credential usable directly on tenant routes; a key that never
+expires or that carries a tenant it was not scoped to.
+
+**Severity.** high
+
+## CTX-18 Sockets open with a single-use ticket
+
+**Principle.** A long-lived connection is opened with a single-use,
+short-lived ticket minted by an authenticated request, never with a
+long-lived credential in a URL. Redeeming the ticket re-checks the
+credential behind it.
+
+**Source.** Section 10, The Gateway.
+
+**Look for.** The socket handshake, the ticket endpoint, ticket
+storage and expiry.
+
+**Violation.** An API key or session token in a socket URL; a ticket
+that can be redeemed twice or long after minting; a redemption that
+does not re-validate the underlying credential.
+
+**Severity.** high
+
+## CTX-19 The operator plane has its own gate and its own context
+
+**Principle.** Operator routes resolve the bearer to an identity, admit
+it only when the identity is on the operator allowlist and the
+credential is the person's own sign-in, and produce an `AdminContext`
+that has no tenant. Operator managers take `AdminContext` and nothing
+else; tenant managers take `OpContext` and nothing else.
+
+**Source.** Section 5, The Operator Context; Section 10, The Gateway.
+
+**Look for.** The operator gate, the `AdminContext` type, every manager
+signature on the operator plane and the tenant plane.
+
+**Violation.** An operator route gated by a tenant role or a feature
+flag; an `AdminContext` with a tenant field; a manager method that
+accepts either context type; an operator route that reaches a tenant
+manager; an API key or an invitation-minted session admitted to the
+operator plane.
+
+**Severity.** high

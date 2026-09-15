@@ -1,0 +1,14 @@
+# tool caches
+node_modules/
+.markdownlint-cli2-cache/
+__pycache__/
+*.pyc
+
+# editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# local scratch
+/tmp/

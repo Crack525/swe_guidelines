@@ -1,20 +1,37 @@
 # Software Design and Architecture Guidelines
 
+This document describes how we design and build a multi-tenant,
+service-based system in Python, from the object model at the center to
+the apps at the edge. It is opinionated on purpose. Every rule below is
+one we apply, and every shape below is
+one we use.
+Where a rule has a cheaper first step, the step is named; where it has
+an exception, the exception is named too.
+
+The running example is a commerce platform with a catalog, orders, and
+inventory. The nouns are illustrative; the shapes are not.
+
 ## 1. The Domain as the Source of Truth
 
 Good design starts with a clear domain. A domain is the set of nouns we
 use to describe the product, and the relationships between them. For a
-closed-loop robot development platform, the nouns might be `Robot`,
-`Lab`, `Task`, `Run`, and `Artifact`. Every layer of the system refers
-back to these nouns, so they must be defined in one place. That place is
-our single source of truth.
+commerce platform the nouns are `Product`, `Order`, `Shipment`,
+`Warehouse`, and `Invoice`. Every layer of the system refers back to
+these nouns, so they must be defined in one place. That place is our
+single source of truth.
 
-The source of truth is an object model of our business domain:
+The source of truth is an object model (OM) of our business domain:
 handwritten, pure Python classes based on Pydantic. We ship this model
 as a standalone Python library, not a web app, a service, or a CLI. Any
 application can depend on it and share the same vocabulary. The library
 lives in the monorepo with its consumers, so the domain evolves with the
 system instead of drifting in a separate repo.
+
+The OM is the source of truth for entities; it is not the wire format
+and it is not the table layout. The network layer projects entities
+onto the wire (Section 10) and the storage layer projects them onto
+rows (Section 8). Both projections are derived from the OM and neither
+changes the OM to suit itself.
 
 > **Principle:** The domain has one source of truth: a standalone OM
 > library. Every layer depends on it; nothing redefines it.
@@ -27,40 +44,48 @@ orthogonal traits. Concrete entities compose the mixins they need
 through multiple inheritance, in a fixed declaration order so a class
 signature reads as a description of the entity.
 
-The mixins:
+The base module holds the root class, the mixins, and the two helpers
+every entity constructor needs: an id factory and a clock.
 
 ``` python
+# platform/om/base.py
+
+def new_id() -> UUID:
+    """A time-ordered UUID v7 as a standard-library UUID."""
+    ...
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
+
 class Platform(BaseModel):
     """Root of the object model. Holds no fields."""
 
-    model_config = ConfigDict(frozen=True)
-
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 class Identifiable(Platform):
-    id: UUID  # uuid_v7
-
+    id: UUID  # uuid_v7, from new_id()
 
 class Named(Platform):
     name: str
-
 
 class Trackable(Platform):
     created_at: datetime
     updated_at: datetime
     created_by: UUID  # id of the user who created it
 
-
 class SoftDeletable(Platform):
     deleted_at: datetime | None = None
     deleted_by: UUID | None = None
+
+EMPTY_UUID = UUID(int=0)
 ```
 
 A concrete entity composes the mixins it needs:
 
 ``` python
-class Bench(Identifiable, Named, Trackable, SoftDeletable):
-    description: str
-    ssh_host: str
+class Warehouse(Identifiable, Named, Trackable, SoftDeletable):
+    address: str
+    timezone: str
 ```
 
 Pydantic merges the fields from every base into a single model along the
@@ -72,10 +97,43 @@ Inheritance is used here for abstraction, not code reuse. `Identifiable`
 means the entity has an identity. `Trackable` means its lifecycle is
 recorded. `SoftDeletable` means it can be hidden without being purged.
 `Named` means it carries a human-facing label. An entity opts into a
-trait by adding the mixin; it opts out by leaving it off.
+trait by adding the mixin; it opts out by leaving it off. An append-only
+record such as an audit entry or a ledger line is `Identifiable` and
+nothing else: it is never updated, so it carries no `updated_at`, and it
+is never hidden, so it carries no `deleted_at`.
 
 > **Principle:** Inheritance expresses abstraction, not code reuse. Each
 > mixin is a promise about what the entity is.
+
+`extra="forbid"` on the root makes a misspelled field a construction
+error instead of a silently ignored key. Every class in the object
+model inherits it, including value objects and the context types of
+Section 5.
+
+### Entities, Value Objects, and Read Models
+
+Three kinds of class live on the OM base chain, and the mixins tell
+them apart.
+
+An **entity** has an identity and is stored: `Order`, `Product`,
+`Warehouse`. It composes `Identifiable` and, unless it is append-only,
+`Trackable`.
+
+A **value object** is a typed piece of an entity with no identity of
+its own: an `Address`, a `Money` amount, a `ShippingProfile`. It
+subclasses `Platform` directly, is frozen like everything else, and is
+stored inline with its owner.
+
+A **read model** is a shape a manager returns that is not an entity: an
+`OrderTotals`, a `StockLevel` aggregated across warehouses, a
+`ShipmentSummary`. It subclasses `Platform`, carries no mixins, and is never
+written back. Read models are how a manager answers a question without
+inventing a table for the answer.
+
+Typed filter and grouping objects (`OrderFilter`, `StockGroupBy`) are
+value objects too. They travel through manager and storage interfaces
+unchanged, so an aggregation runs in SQL on one storage impl and in
+Python on another while the caller writes the same code.
 
 ### Immutability
 
@@ -83,52 +141,103 @@ trait by adding the mixin; it opts out by leaving it off.
 > copy-and-write, never by mutation.
 
 Every OM entity is immutable. Pydantic models in the base chain are
-configured as frozen, so a `Bench` returned from a read is a snapshot,
-not a live handle. Updates happen by copy-and-write: take the entity,
-produce a modified copy (`bench.model_copy(update={...})`), and pass the
-copy to a write method. This keeps shared references safe across async
-tasks, makes reasoning about state simpler, and enforces the "IDs
-originate top-down" rule, since no layer can quietly rewrite an entity
-after it was constructed.
+configured as frozen, so a `Warehouse` returned from a read is a
+snapshot, not a live handle. Updates happen by copy-and-write: take the
+entity, produce a modified copy, and pass the copy to a write method.
+This keeps shared references safe across async tasks, makes reasoning
+about state simpler, and enforces the "IDs originate top-down" rule,
+since no layer can quietly rewrite an entity after it was constructed.
+
+> **Python tip:** `entity.model_copy(update={...})` is the whole
+> update vocabulary. A manager that updates an entity sets
+> `updated_at` in the same copy, so the caller gets back the copy that
+> was written and nothing else has to remember the timestamp.
 
 The same rule applies to every object built on the OM base chain,
-including the sub-objects of `OpContext`, and to the generated IDL types
+including the sub-objects of `OpContext`, and to the wire types
 described in the network layer. The one deliberate exception is the
 SQLAlchemy row classes under `tables/`, which must be mutable so the
 session can track writes; they never leak past the storage boundary.
 
+### Identifiers
+
+Every id in the system is `uuid_v7`. Both v4 and v7 are 128 bits and
+globally unique in practice, but v7 prefixes its bits with a 48-bit
+millisecond timestamp and fills the rest with randomness. That choice
+earns its keep on every write and every range query.
+
+Inserts into a B-tree index on a v7 id land at the tail of the tree
+because the timestamp prefix orders lexicographically by insertion time.
+Every OM entity lives in a relational DB with its id as the primary key,
+so the difference shows up on every insert. A list of entities by
+creation time is a range scan on the id column, and anyone reading a
+log line can eyeball roughly when a record was created from the id
+alone, which is cheap triage.
+
+IDs are minted by whoever constructs the entity, always above the
+storage layer, with `new_id()`. The database never assigns an id and
+nothing reads an id back after a write.
+
+> **Python tip:** `new_id()` wraps `uuid_utils.uuid7()` and returns a
+> standard-library `UUID`, so nothing else in the codebase depends on
+> the package.
+
+`EMPTY_UUID` is the reserved system scope. Cross-tenant reference data
+(platform-owned catalogs, schema metadata, global configuration) uses it
+as the `org_id` on cache and bucket calls, so system keys and tenant
+keys live in disjoint namespaces. The same constant serves as a sentinel
+where a required, indexed foreign reference means "none", which keeps
+the column `NOT NULL` and the index simple.
+
+> **Principle:** Every id is `uuid_v7`, minted above storage with
+> `new_id()`. Time-ordered inserts, time-ordered scans, and
+> time-readable logs fall out of one choice.
+
 ## 3. Namespaces as Swimlanes
 
 The object model is split into namespaces that mirror the swimlanes of
-the product. A robot or lab is a long-lived thing we define and monitor.
-A task or run is something we author, execute, observe, and report on.
-These concepts interact heavily, but remain separate first-class domains
-rather than being buried under one another.
+the product. A warehouse or a product is a long-lived thing we define
+and maintain. An order is something we create, fulfil, observe, and
+report on. These concepts interact heavily, but remain separate
+first-class domains rather than being buried under one another.
 
-    platform.om.robots.*
-    platform.om.runs.*
+    platform.om.catalog.*
+    platform.om.orders.*
+    platform.om.inventory.*
 
 Each top-level namespace under `om` has the same internal shape:
 
-    platform/om/robots/
-        RobotManagerInterface      # manager interface at the root
-        types/                     # entity classes
+    platform/om/orders/
+        __init__.py                # re-exports OrderManagerInterface
+        manager.py                 # the manager interface
+        types/                     # entity classes, value objects, read models
         impl/                      # manager implementations
+        storage/                   # storage interface, impls, tables (Section 8)
+        rules.py                   # pure functions, when the namespace has any
 
-The manager interface sits directly at the namespace root, so consumers
-can import it with a short path. `types/` holds the entity classes.
-`impl/` holds the concrete manager classes. Other supporting folders
-such as `utils/` are also expected alongside these, for
-namespace-specific helpers.
+The manager interface is defined in `manager.py` and re-exported from
+the package root, so consumers import it with a short path:
+`from platform.om.orders import OrderManagerInterface`. `types/` holds
+the classes of Section 2. `impl/` holds the concrete manager classes.
 
-When a namespace grows, `types/` (or any other folder) can be
-sub-sectioned. Under a run-oriented namespace, `types/` may split by
-lifecycle phase:
+### Pure Rules
 
-    platform/om/runs/types/
-        sources/       # what we author or request
-        executions/    # what a run produces
-        reports/       # what we present to users or agents
+A namespace that carries real business logic keeps the pure part of it
+in a module of plain functions next to the interface: pricing, window
+arithmetic, eligibility checks, aggregation rules. These functions take
+values and return values. They read no storage, consult no clock, and
+open no settings. That makes them unit-testable without infrastructure
+and, more importantly, shareable: when two storage impls must produce
+the same aggregate, both call the same function, so a relational impl
+and an in-memory impl cannot drift apart.
+
+> **Principle:** A namespace's rules are pure functions in one module.
+> Storage impls and manager impls call them; nothing re-implements them.
+
+Cross-cutting namespaces are namespaces like any other. Tenancy
+(organizations, users, memberships, credentials) and audit (who did
+what, when, from which app) are first-class swimlanes with their own
+types, managers, and storage, not utilities hanging off the root.
 
 ## 4. Interfaces
 
@@ -138,9 +247,9 @@ operations its scope supports. An operation is an async method whose
 signature is a contract.
 
 ``` python
-class BenchManagerInterface:
-    async def get_benches(self, ctx: OpContext) -> list[Bench]: ...
-    async def get_bench(self, ctx: OpContext, bench_id: UUID) -> Bench: ...
+class WarehouseManagerInterface:
+    async def get_warehouses(self, ctx: OpContext) -> list[Warehouse]: ...
+    async def get_warehouse(self, ctx: OpContext, warehouse_id: UUID) -> Warehouse: ...
 ```
 
 The interface describes a capability. The impl decides how the
@@ -148,24 +257,28 @@ capability is delivered. That separation is what makes the impls behind
 an interface mockable, stubbable, and injectable, and it is what lets a
 single `*Interface` back several different impls at once.
 
+> **Python tip:** an interface is a plain class whose methods have
+> `...` bodies, and an impl subclasses it. That is enough for the type
+> checker to hold every impl to the signature, and it keeps the
+> interface readable as documentation.
+
 ### Multiple impls per interface
 
-An interface usually has more than one impl, and they are
-interchangeable at wiring time. Callers never know which one they are
-holding.
+An interface has at least two impls, a technology impl and an
+in-memory impl, and they are interchangeable at wiring time. Callers never know which one they are
+holding. Names put the technology last: `WarehouseStoragePostgresImpl`,
+`WarehouseStorageMemoryImpl`.
 
-Default impls for tests and local dev:
+The in-memory impl is the default for unit tests and the fast local
+gate. It keeps state in an in-process dict and exercises real behavior
+without infrastructure. It is a full second implementation: every read,
+write, filter, and tenancy rule the relational impl has, the memory
+impl has too, and the test suite runs both.
 
--   `BenchManagerMemoryOnlyImpl`: keeps state in an in-process dict.
-    Exercises real behavior without infrastructure.
--   `BenchManagerVoidImpl`: a concrete impl whose writes are `pass` and
-    whose reads raise `NotFound` or return empty. Useful when a test
-    needs the interface wired but does not care about its behavior.
+Technology-specific impls for storage follow the same interface:
 
-Technology-specific impls for storage:
-
--   `BenchStoragePostgresImpl`
--   `BenchStorageClickHouseImpl`
+-   `WarehouseStoragePostgresImpl`
+-   `WarehouseStorageClickHouseImpl`
 
 Swapping the impl at the storage root moves the system onto a different
 engine without any caller changing.
@@ -176,23 +289,20 @@ Because an impl depends on an interface, impls compose. Caching is a
 common case:
 
 ``` python
-class CacheInterface:
+class KeyValueInterface:
     async def get(self, key: str) -> bytes | None: ...
     async def set(self, key: str, value: bytes) -> None: ...
 
+class LocalCacheImpl(KeyValueInterface): ...  # in-process
 
-class LocalCacheImpl(CacheInterface): ...  # in-process
+class CloudCacheImpl(KeyValueInterface): ...  # hosted key-value store
 
-
-class CloudCacheImpl(CacheInterface): ...  # redis-like
-
-
-class MixedCacheImpl(CacheInterface):
-    def __init__(self, local: CacheInterface, cloud: CacheInterface):
+class MixedCacheImpl(KeyValueInterface):
+    def __init__(self, local: KeyValueInterface, cloud: KeyValueInterface):
         self._local = local
         self._cloud = cloud
 
-    async def get(self, key):
+    async def get(self, key: str) -> bytes | None:
         value = await self._local.get(key)
         if value is not None:
             return value
@@ -202,11 +312,13 @@ class MixedCacheImpl(CacheInterface):
         return value
 ```
 
-`MixedCacheImpl` takes two `CacheInterface` values and returns one. The
-caller holds a `CacheInterface` and cannot tell whether the hit came
+`MixedCacheImpl` takes two `KeyValueInterface` values and returns one.
+The caller holds a `KeyValueInterface` and cannot tell whether the hit came
 from local memory, the cloud, or a two-level composite. The same pattern
-fits retry, metrics, and feature-flag wrappers: each is an impl that
-holds an inner impl and forwards selectively.
+fits retry, metrics, and tracing wrappers: each is an impl that holds an
+inner impl and forwards selectively. Decoration is an infrastructure
+pattern; a manager that needs a cache takes one through its constructor
+rather than wrapping its storage.
 
 ### Injectability
 
@@ -220,39 +332,111 @@ in the right order and wires them together. This is what makes the swaps
 and compositions above cheap; nothing has to be rewritten to switch an
 impl.
 
+Configuration is injected the same way. A manager that has tunables (a
+default page size, a lease length, a threshold) takes a small frozen
+options object in its constructor, built once at boot from settings.
+Managers never read environment variables.
+
+When two managers genuinely need each other, the cycle is broken above
+them, not inside them: extract the shared operation into the lower
+namespace, or pass a narrow callable for the one operation the upper
+manager needs. Reaching into another impl's private attributes after
+construction is not wiring; it is a cycle that has not been resolved.
+
 ## 5. OpContext
 
 Every operation takes an `OpContext` as its first argument. The context
 carries the ambient information every operation needs: who is acting, on
-behalf of which tenant, with what role, and from which application.
+behalf of which tenant, with what role and permissions, from which
+application, and under which request.
 
 ``` python
-class SecurityContext(BaseModel):
+class SecurityContext(Platform):
     user: User
-    org: Tenant
+    org: Org
     role: Role
-    permissions: list[Permission]
+    permissions: tuple[Permission, ...]
+    teams: tuple[UUID, ...] = ()
+    credential_kind: CredentialKind  # api_key, session_token, internal, ...
 
+class AppContext(Platform):
+    type: AppType   # portal, cli, api, worker, ...
+    version: str    # e.g. "portal@2.14.0", useful for compatibility checks and telemetry
 
-class AppContext(BaseModel):
-    type: AppType
-    version: str  # e.g. "portal@2.14.0", useful for compatibility checks and telemetry
-
-
-class OpContext(BaseModel):
+class OpContext(Platform):
     security: SecurityContext
     app: AppContext
+    request_id: UUID
+    trace_id: str | None = None
+
+    @property
+    def org_id(self) -> UUID: ...
+
+    @property
+    def user_id(self) -> UUID: ...
+
+    def has(self, permission: Permission) -> bool: ...
+    def require(self, permission: Permission) -> None: ...  # raises NotAuthorized
+    def in_team(self, team_id: UUID) -> bool: ...
 ```
 
-`OpContext` is always populated by the gateway or app layer, which is a
-thin shell around the core business logic. By the time a request reaches
-a manager, the context is already fully built. Operations never reach
-for ambient state through globals or thread locals. All ambient state
-flows through the context, which keeps operations easy to test with a
-fake context and easy to reason about across layers.
+Permissions are a pure function of role, declared in one table in the
+tenancy namespace. A credential never carries a role above its
+issuer's. Teams are a second authorization axis inside a tenant: an
+entity may be owned by a team, and visibility rules consult
+`ctx.in_team`.
+
+`request_id` is ambient state exactly like identity. It is minted or
+accepted at the edge, stamped onto the context once, and from there it
+reaches every log line, every audit row, and the error envelope without
+any layer passing it by hand.
+
+The convenience methods are what keep authorization in the business
+layer. `ctx.require(Permission.WRITE)` is one line at the top of a
+manager method, which is why it stays there instead of drifting to the
+edge.
+
+`OpContext` is populated by the gateway (Section 10) when a request
+arrives, by the claim operation a worker calls to take a unit of work
+(Section 7, Operations Without a Principal), and by the bootstrap that
+seeds a fresh environment. Nothing else constructs one. By the time a request reaches a manager, the context is already
+fully built. Operations never reach for ambient state through globals
+or thread locals. All ambient state flows through the context, which
+keeps operations easy to test with a fake context and easy to reason
+about across layers.
+
+`OpContext` is immutable. Once built, it flows through every downstream
+call unchanged. No layer adds, replaces, or mutates its fields
+mid-request. If an operation needs a narrower view (an override, a
+narrowed permission set), it is passed as an explicit argument, not by
+mutating `ctx`.
 
 > **Principle:** All ambient state flows through `OpContext`. No
 > globals, no thread locals, no hidden lookups.
+
+### The Operator Context
+
+A tenant context always names one organization. The people who operate
+the platform itself have questions no tenant context can answer: usage
+across every organization, service health, global configuration. That is
+a different plane with a different context type:
+
+``` python
+class AdminContext(Platform):
+    identity_id: UUID
+    email: str
+    credential_kind: CredentialKind
+    request_id: UUID
+```
+
+`AdminContext` has no `org_id`, on purpose. Operator managers take it
+and nothing else; tenant managers take `OpContext` and nothing else. The
+type system, not convention, keeps the two planes apart: an operator
+route cannot act inside a tenant, and a tenant route cannot reach the operator plane. The operator plane is described further in Section 10 (the
+gateway) and Section 15 (the operator console).
+
+> **Principle:** Tenant operations take `OpContext`; operator operations
+> take `AdminContext`. The two never mix in one signature.
 
 ## 6. Separation of Layers
 
@@ -266,27 +450,70 @@ The system has three layers:
 
 Each layer is a swimlane with its own language and its own
 responsibilities. Upper layers depend on interfaces exposed by lower
-layers, never on their internals. The infrastructure layer may be
-blended into any of these where necessary, but its presence is never
-allowed to leak a technology choice across a boundary.
+layers, never on their internals. Infrastructure capabilities (Section 9) are injected into any of these
+layers and never leak a technology choice across a boundary.
+
+Authorization and tenancy are split across two layers on purpose.
+Permissions and visibility are business decisions and live in
+managers, where the rule can be read next to the operation it guards.
+Tenancy is a data boundary and lives in storage, where every query
+carries the tenant and every write checks it. A request that reaches
+storage has already been authorized; a query that reaches the database
+cannot cross a tenant.
 
 > **Principle:** Three layers: Network, Business, Storage. Upper depends
 > on lower through interfaces only. Infrastructure cross-cuts without
-> leaking technology.
+> leaking technology. Managers authorize; storage enforces tenancy.
 
 ## 7. The Business Layer
 
 The business layer is where the object model comes alive. Managers
 expose operations through `*ManagerInterface` (Section 4). Each
 operation takes `OpContext` as its first argument (Section 5) and
-returns OM entities (Section 2). A manager impl holds whatever it needs
-to do its work: the storage under its namespace, any peer manager whose
-operations it composes, and any infrastructure capability it leans on.
-All dependencies are injected through the constructor and typed by
-interface. A business-layer root wires them together at boot.
+returns OM entities or read models (Section 2). A manager impl holds
+whatever it needs to do its work: the storage under its namespace, any
+peer manager whose operations it composes, and any infrastructure
+capability it leans on. All dependencies are injected through the
+constructor and typed by interface. A business-layer root wires them
+together at boot and hands back one frozen object with a field per
+manager.
 
-Storage is the most common dependency a manager takes and is covered
-next. Infrastructure (caches, buckets, topics) follows after that.
+### Shape of an Operation
+
+Every write follows the same four steps: authorize, verify, copy,
+write. Reading it once is enough to read every manager in the system.
+
+``` python
+class WarehouseManagerImpl(WarehouseManagerInterface):
+    def __init__(self, storage: WarehouseStorageInterface):
+        self._storage = storage
+
+    async def update_warehouse(self, ctx: OpContext, warehouse: Warehouse) -> Warehouse:
+        ctx.require(Permission.WRITE)
+        await self.get_warehouse(ctx, warehouse.id)  # existence and tenancy, or NotFound
+        updated = warehouse.model_copy(update={"updated_at": utcnow()})
+        await self._storage.write_warehouse(ctx.org_id, updated)
+        return updated
+```
+
+The caller that originates an entity constructs it whole, with
+`id=new_id()`, `created_at`, `updated_at`, and `created_by=ctx.user_id`
+set, and hands it to `create_*`. The manager sets `updated_at` on every
+update and `deleted_at` / `deleted_by` on a soft delete, always by copy.
+Mutating methods return the entity that was written, so the caller
+holds the same snapshot the storage does.
+
+### Parameters
+
+Parameters follow a top-down hierarchy, from the broadest scope to the
+narrowest. In a manager signature the tenant and the user are already
+in `ctx`, so the visible parameters start at the next level:
+`(ctx, customer_id, order_id, line_id)` peels customer, then order, then
+line. Optional filters follow the required scoping ids as keyword
+parameters with defaults. Reading a signature left to right tells the
+reader how the scope narrows. The same ordering applies in storage and
+service interfaces, where `org_id` and, where relevant, `user_id`
+appear explicitly at the front.
 
 ### Cross-Manager Dependencies
 
@@ -295,23 +522,34 @@ injected through the constructor. The interface is untouched; only the
 impl gains the parameter.
 
 ``` python
-# platform/om/hiltesting/impl/hiltesting_manager_impl.py
+# platform/om/orders/impl/order_manager_impl.py
 
-
-class HiltestingManagerImpl(HiltestingManagerInterface):
+class OrderManagerImpl(OrderManagerInterface):
     def __init__(
         self,
-        storage: HiltestingStorageInterface,
-        bench_manager: BenchManagerInterface,
+        storage: OrderStorageInterface,
+        inventory_manager: InventoryManagerInterface,
     ):
         self._storage = storage
-        self._bench_manager = bench_manager
+        self._inventory_manager = inventory_manager
 ```
 
 The dependency is an implementation detail, not part of
-`HiltestingManagerInterface`. The business-layer root constructs every
+`OrderManagerInterface`. The business-layer root constructs every
 manager in the right order and wires dependencies between them. Callers
 see only the interfaces.
+
+### Operations Without a Principal
+
+A few operations exist before any principal does, or act across every
+tenant: claiming the next unit of background work, sweeping expired
+leases, finding the integration that owns an inbound webhook token.
+These are declared explicitly on the manager interface without `ctx`,
+documented as platform-internal, and they *produce* a context rather
+than consume one: a claim returns the context under which the work
+runs, and a sweep asks for one service context per live tenant. They
+are the exception that keeps everything else honest, and there are very
+few of them.
 
 ## 8. The Storage Layer
 
@@ -321,59 +559,73 @@ surprises.
 
 ### Principles
 
--   No hidden relationships. The schema does not model links the
-    business layer cannot see.
+-   The code never relies on a relationship the database knows about.
+    A foreign key may exist for integrity or as an optimization, but no
+    manager assumes a cascade, a rejected orphan, or a join the schema
+    happens to permit. Relationships the business layer needs are plain
+    id columns it reads and writes itself.
 -   No transactions. We are not a bank app, and transactions do not
-    scale in the shapes we care about.
+    scale in the shapes we care about. A storage operation is one
+    statement or one short, self-contained unit that the impl commits
+    itself; nothing spans two storage calls. Where atomicity is
+    genuinely unavoidable (a work-queue claim, a ledger in a system
+    that moves money), it is a single named interface method, so the interface stays
+    technology-free and the exception is visible by name.
 -   Joins are avoided but allowed as an implementation detail. They
     never leak into the interface.
 -   No trigger functions and no hidden magic. If something happens, it
     happens in our code.
 -   Every ID is passed top-down. We do not create an object in the DB
-    and read its ID afterwards. IDs originate in the business layer.
+    and read its ID afterwards. IDs originate above storage, with
+    `new_id()`.
 -   Defaults are set in the object model. Schema-level defaults are
     optional, kept as a convenience for admin and test operations where
-    someone may need to write plain SQL to tweak things and schema
-    defaults keep those statements short.
+    an operator writes plain SQL by hand and schema defaults keep
+    those statements short. A default added to backfill a
+    new column is removed once the backfill is done.
 -   The storage layer must be swappable. Moving from a relational DB to
-    a columnar DB on a different technology should only change `impl/`,
+    a columnar DB on a different technology changes only `impl/`,
     never the interfaces or the entities.
 -   No user-defined functions in the DB. Every query is written
-    explicitly in their storage manager classes.
+    explicitly in its storage class.
+-   Tenancy is enforced on every read and checked on every write. A
+    query filters by `org_id`; an upsert refuses to overwrite a row that
+    belongs to another tenant.
 
 ### Namespace Shape
 
 Storage follows the same namespace pattern as the rest of the object
 model, scoped under its parent entity namespace:
 
-    platform/om/robots/storage/
-        BenchStorageInterface
-        impl/       # implementation of reads and writes
-        tables/     # ORM classes, not exposed
+    platform/om/inventory/storage/
+        __init__.py     # WarehouseStorageInterface
+        impl/           # postgres.py, memory.py
+        tables/         # ORM classes, not exposed
 
 The interface exposes read and write operations on domain entities.
 Every operation takes `org_id` as a parameter, so tenancy is enforced at
 every query:
 
 ``` python
-class BenchStorageInterface:
-    async def read_benches(self, org_id: UUID) -> list[Bench]: ...
-    async def write_bench(self, org_id: UUID, bench: Bench) -> None: ...
+class WarehouseStorageInterface:
+    async def read_warehouses(self, org_id: UUID) -> list[Warehouse]: ...
+    async def read_warehouse(self, org_id: UUID, warehouse_id: UUID) -> Warehouse | None: ...
+    async def write_warehouse(self, org_id: UUID, warehouse: Warehouse) -> None: ...
 ```
 
-Some scopes are strictly user-bound. A bench canvas view, where the
-`x, y` positions of boxes and connections are personal to each user, is
-not just tenant-scoped; it is user-scoped within a tenant. In those
-cases the interface adds `user_id` on top of `org_id` explicitly:
+Some scopes are strictly user-bound. An order board view, where the
+column layout and pinned filters are personal to each user, is not just
+tenant-scoped; it is user-scoped within a tenant. In those cases the
+interface adds `user_id` on top of `org_id` explicitly:
 
 ``` python
-class BenchCanvasViewStorageInterface:
-    async def read_bench_view(
+class OrderBoardViewStorageInterface:
+    async def read_board_view(
         self,
         org_id: UUID,
         user_id: UUID,
-        bench_id: UUID,
-    ) -> BenchCanvasView: ...
+        board_id: UUID,
+    ) -> OrderBoardView | None: ...
 ```
 
 Both keys are passed, and both appear in the `WHERE` clause of every
@@ -382,20 +634,17 @@ scope within the tenant.
 
 The interface never exposes the underlying technology. A session object
 or connection pool is injected into the implementation, never referenced
-in the interface. A consumer of `BenchStorageInterface` must not be able
-to tell whether it is talking to SQLAlchemy, Postgres, or a columnar
-store.
+in the interface. A consumer of `WarehouseStorageInterface` must not be
+able to tell whether it is talking to SQLAlchemy, Postgres, or a
+columnar store.
 
-### Hierarchy in Parameters
-
-Parameters follow a top-down hierarchy, from the broadest scope to the
-narrowest, regardless of which layer the call lives in. A method that
-takes `org_id, user_id, proj_id, bench_id, test_suite_id, test_step_id`
-peels layers in sequence: tenant first, then the user inside the tenant,
-then the project, then the bench, then the suite, then the step. Reading
-a signature left to right tells the reader how the scope narrows. The
-same ordering applies everywhere parameters appear: storage interfaces,
-manager interfaces, service interfaces, and their impls.
+A small number of tables are global by nature: the identities behind
+tenant users, platform-owned reference data, a health row per external
+provider. Their storage methods take no `org_id`, and the interface
+docstring says why. Cross-tenant sweeps (expire every lease that is
+past due, in every tenant) return `tuple[UUID, Entity]` so the tenant
+travels back with each row. These are the documented exceptions to the
+`org_id`-first rule, and a test enumerates them.
 
 ### Storage Root
 
@@ -404,51 +653,56 @@ which implements `StorageInterface` and lives at `platform.om.storage`:
 
 ``` python
 class StorageInterface:
-    def get_bench_storage(self) -> BenchStorageInterface: ...
+    def get_warehouse_storage(self) -> WarehouseStorageInterface: ...
 
     # one getter per entity storage
+
+    async def healthcheck(self) -> bool: ...
+    async def close(self) -> None: ...
 ```
 
 This root is the top-down entry point into all storage. Higher layers
 receive a `StorageInterface` and ask it for the storage they need, which
 keeps construction centralized and makes each entity storage trivially
-mockable in tests.
+mockable in tests. Two roots exist from day one, one over the relational
+engine and one in memory, and each constructs every namespace impl and
+wires cross-storage dependencies between them.
 
 `platform.om.storage` also hosts the shared building blocks used by
-every concrete storage: common ORM base classes under `tables/` and
-translation helpers under `utils/`. These are covered in the next
-subsections.
+every concrete storage: common ORM base classes under `tables/`,
+translation helpers under `utils/`, and the table-to-role map described
+under Database Roles.
 
 ### Defining ORM Classes
 
 Table classes mirror the OM mixins from Section 2, so their definitions
 stay focused on what is specific to the entity. The common mixins live
 at `platform.om.storage.tables`, with one storage-only addition:
-`org_id` rides on `IdentifiableMixin`, because every table is
-tenant-scoped.
+`org_id` rides on `IdentifiableMixin`, because every tenant table is
+tenant-scoped. A global table composes `GlobalIdentifiableMixin`, which
+carries `id` alone.
 
 ``` python
 # platform/om/storage/tables/base.py
 
-
 class IdentifiableMixin:
-    id: Mapped[UUID]
-    org_id: Mapped[UUID]  # storage-only; populated from OpContext at call time
+    id: Mapped[UUID] = mapped_column(primary_key=True, sort_order=-1000)
+    org_id: Mapped[UUID] = mapped_column(index=True, sort_order=-999)  # storage-only
 
+class GlobalIdentifiableMixin:
+    id: Mapped[UUID] = mapped_column(primary_key=True, sort_order=-1000)
 
 class NamedMixin:
-    name: Mapped[str]
-
+    name: Mapped[str] = mapped_column(sort_order=-900)
 
 class TrackableMixin:
-    created_at: Mapped[datetime]
-    updated_at: Mapped[datetime]
-    created_by: Mapped[UUID]
-
+    created_at: Mapped[datetime] = mapped_column(sort_order=-800)
+    updated_at: Mapped[datetime] = mapped_column(sort_order=-799)
+    created_by: Mapped[UUID] = mapped_column(sort_order=-798)
 
 class SoftDeletableMixin:
-    deleted_at: Mapped[datetime | None]
-    deleted_by: Mapped[UUID | None]
+    deleted_at: Mapped[datetime | None] = mapped_column(sort_order=-700)
+    deleted_by: Mapped[UUID | None] = mapped_column(sort_order=-699)
 ```
 
 Concrete table classes live in their owning namespace's `tables/` folder
@@ -456,47 +710,76 @@ and compose the mixins their entity has, in the same house-style order
 as the OM:
 
 ``` python
-# platform/om/robots/storage/tables/benches.py
+# platform/om/inventory/storage/tables/warehouses.py
 
-
-class Benches(IdentifiableMixin, NamedMixin, TrackableMixin, SoftDeletableMixin, Base):
-    __tablename__ = "benches"
-    description: Mapped[str]
-    ssh_host: Mapped[str]
+class Warehouses(IdentifiableMixin, NamedMixin, TrackableMixin, SoftDeletableMixin, Base):
+    __tablename__ = "warehouses"
+    address: Mapped[str]
+    timezone: Mapped[str]
 ```
 
-`Benches` declares only what is unique to a bench. Identity, tenancy,
-name, lifecycle timestamps, and soft-delete fields come from the mixins.
-Tables carry `org_id` while OM entities do not; tenancy is a storage
-concern, populated by the business layer from `OpContext` at call time.
+`Warehouses` declares only what is unique to a warehouse. Identity,
+tenancy, name, lifecycle timestamps, and soft-delete fields come from
+the mixins. Tables carry `org_id` while tenant OM entities do not;
+tenancy is a storage concern, populated by the business layer from
+`OpContext` at call time. The exception is an entity whose readers have
+no tenant: a row an operator reads across every tenant carries `org_id` as
+a model field too, so the reader knows whose it is.
 
 Unlike OM entities, table classes are mutable by design. The SQLAlchemy
 session tracks in-place changes to produce SQL, so rows must not be
 frozen. This is the one deliberate exception to the OM immutability
 rule, and it is bounded: rows never leave the storage impl.
 
+Column order is part of the model. Every table opens with its mixin
+columns in house-style order and its own columns follow, and a new
+column is declared at the end of its class so the physical table and
+the class stay in step when the column is appended.
+
+> **Python tip:** SQLAlchemy places mixin columns after the class's own
+> columns whatever the base order says. The negative `sort_order` bands
+> on the mixins (`-1000` for identity, `-900` for name, and so on) pin
+> the header block to the front.
+
+Three index rules cover almost every table:
+
+1.  A feed wants a compound index on `(org_id, id)`. Because ids are
+    v7, that index sorts by creation time, and a B-tree scans backwards
+    for free, so a descending index is never needed.
+2.  A column that already leads a compound index gets no single-column
+    index of its own.
+3.  Index what the SQL filters on, not what Python filters afterwards.
+    Reach for a compound index when a real query asks for one.
+
 ### Translation
 
-Storage translates between the OM entity and the table row. For `Bench`
-and `Benches`, field names match one-to-one, so translation is
-mechanical in both directions. Two module-level helpers in
+Storage translates between the OM entity and the table row. For
+`Warehouse` and `Warehouses`, field names match one-to-one, so
+translation is mechanical in both directions. Module-level helpers in
 `platform.om.storage.utils` cover that case:
 
 ``` python
 # platform/om/storage/utils/translation.py
 
-
-def to_row(entity: BaseModel, row_type: type[R]) -> R:
-    return row_type(**entity.model_dump())
-
+def to_row(entity: BaseModel, row_type: type[R], **extra: Any) -> R:
+    """Build a row from an entity; `extra` carries storage-only columns such as org_id."""
+    ...
 
 def to_model(row: Any, model_type: type[M]) -> M:
     return model_type.model_validate(row, from_attributes=True)
+
+def apply_row(row: Any, entity: BaseModel) -> None:
+    """Copy entity values onto an existing row in place, never touching org_id."""
+    ...
 ```
 
-A write of a `Bench` becomes `to_row(bench, Benches)`; a read becomes
-`to_model(row, Bench)`. The storage impl sets `row.org_id` explicitly
-since the OM entity does not carry it.
+A write of a `Warehouse` becomes `to_row(warehouse, Warehouses,
+org_id=org_id)`; a read becomes `to_model(row, Warehouse)`; an update
+of an existing row becomes `apply_row(row, warehouse)`. Nested value
+objects, enums, and tuples are dumped in JSON mode into JSON columns,
+scalars are dumped natively, and the helpers decide which by looking at
+the column type, so a namespace with plain shapes writes no translation
+code at all.
 
 Custom translation is written only when the row and the entity diverge,
 for example when a row carries a computed column or a field is
@@ -504,43 +787,44 @@ denormalized. Module-level helpers are preferred over an inheritance
 base so that multi-entity storages, which touch more than one
 `(entity, row)` pair, can use the same primitives without contortion.
 
-### BenchStorageImpl
+### A Storage Impl
 
-`BenchStorageImpl` implements `BenchStorageInterface` against a
-SQLAlchemy session. The session is injected into the constructor and
-never surfaced through the interface:
+`WarehouseStoragePostgresImpl` implements `WarehouseStorageInterface`
+against a SQLAlchemy session factory. The factory is injected into the
+constructor and never surfaced through the interface. A shared base
+provides the one write primitive every namespace uses: an upsert that
+checks the tenant.
 
 ``` python
-# platform/om/robots/storage/impl/bench_storage_impl.py
+# platform/om/inventory/storage/impl/postgres.py
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+class WarehouseStoragePostgresImpl(PgStorageBase, WarehouseStorageInterface):
+    async def read_warehouses(self, org_id: UUID) -> list[Warehouse]:
+        stmt = (
+            select(Warehouses)
+            .where(Warehouses.org_id == org_id, Warehouses.deleted_at.is_(None))
+            .order_by(Warehouses.id)
+        )
+        async with self._session_for(stmt) as session:
+            result = await session.execute(stmt)
+            return [to_model(row, Warehouse) for row in result.scalars()]
 
-from platform.om.benches.types.bench import Bench
-from platform.om.benches.storage import BenchStorageInterface
-from platform.om.benches.storage.tables.benches import Benches
-from platform.om.storage.utils.translation import to_model, to_row
-
-
-class BenchStorageImpl(BenchStorageInterface):
-    def __init__(self, session: AsyncSession):
-        self._session = session
-
-    async def read_benches(self, org_id: UUID) -> list[Bench]:
-        stmt = select(Benches).where(Benches.org_id == org_id)
-        result = await self._session.execute(stmt)
-        return [to_model(row, Bench) for row in result.scalars()]
-
-    async def write_bench(self, org_id: UUID, bench: Bench) -> None:
-        row = to_row(bench, Benches)
-        row.org_id = org_id
-        self._session.add(row)
-        await self._session.flush()
+    async def write_warehouse(self, org_id: UUID, warehouse: Warehouse) -> None:
+        await self._upsert(Warehouses, org_id, warehouse)
 ```
 
-Every query filters by `org_id`, so tenancy is enforced at the storage
-level. Writes stage on the session and flush; commit decisions belong to
-the outer scope that opened the session.
+`_upsert` reads the existing row by id, raises if the row belongs to
+another tenant, applies the entity onto the row or inserts a new one,
+and commits. Every query filters by `org_id`, so tenancy is enforced at
+the storage level; every write checks it, so a bug in a caller cannot
+move a row across tenants. Each operation opens its own short session
+and commits it; there is no session that outlives the call.
+
+> **Python tip:** when a row must be read and updated atomically by
+> exactly one worker (a queue claim), `SELECT ... FOR UPDATE SKIP
+> LOCKED` inside that one storage method is the whole solution. A
+> compare-and-set on a `version` column is the portable alternative
+> when the row is contended but not queued.
 
 ### Cross-Storage Dependencies
 
@@ -549,59 +833,127 @@ dependency is injected through the constructor. The interface is
 untouched; only the impl gains the parameter.
 
 ``` python
-# platform/om/hiltesting/storage/impl/hiltesting_storage_impl.py
+# platform/om/orders/storage/impl/postgres.py
 
-
-class HiltestingStorageImpl(HiltestingStorageInterface):
+class OrderStoragePostgresImpl(PgStorageBase, OrderStorageInterface):
     def __init__(
         self,
-        session: AsyncSession,
-        bench_storage: BenchStorageInterface,
+        sessions: SessionFactory,
+        warehouse_storage: WarehouseStorageInterface,
     ):
-        self._session = session
-        self._bench_storage = bench_storage
+        super().__init__(sessions)
+        self._warehouse_storage = warehouse_storage
 ```
 
 The dependency is an implementation detail, not part of
-`HiltestingStorageInterface`. `Storage`, the root that implements
+`OrderStorageInterface`. `Storage`, the root that implements
 `StorageInterface`, is in charge of constructing every storage impl in
 the right order and wiring dependencies between them. Callers see only
 the interfaces.
 
+### Database Roles
+
+Not every table has the same shape or the same life. Tenant metadata is
+small, relational, and read on every request. Event streams and audit
+trails are append-only, grow by thousands of rows per activity, and are
+read mostly by one parent id. A work queue is hot and tiny. One
+undifferentiated schema means one pool, one vacuum schedule, one backup,
+and one place where an analytical scan competes with a queue claim.
+
+Every table belongs to exactly one **database role**, and lives in the
+schema named after it:
+
+| Role       | Holds                                                   |
+|------------|---------------------------------------------------------|
+| `core`     | the system of record: tenancy, catalog, orders, config  |
+| `activity` | append-only streams: events, audit, ledgers             |
+| `queue`    | the work queue and the channels that wake workers       |
+| `admin`    | the operator plane's own state, global rows             |
+
+A map from table name to role in `platform.om.storage.roles` is the
+single source of truth. The ORM base derives each table's schema from
+it, each role has its own connection URL that defaults to the shared
+one, and the storage root opens one engine and pool per distinct URL.
+The default deployment is one database holding every role schema; when
+metrics demand it, a role moves to its own database by changing one
+URL and copying one schema.
+
+Rules that make the move safe, each checked by a unit test:
+
+-   No cross-role foreign keys and no cross-role statements. A
+    statement touches one role; the base class routes it by the table
+    it names and refuses one that spans roles.
+-   Consistency between roles is the manager's concern: write the core
+    row first, then the stream row; idempotency keys make retries safe.
+-   The topic bus (Section 9), when it is backed by the database,
+    connects to the queue role, because the processes that enqueue work
+    and the workers they wake must share it.
+
+Analytics across tenants never runs in the request path of any role.
+When reporting is needed it reads a mirror fed by change data capture
+or a periodic copy, never a role the application writes to.
+
+> **Principle:** Every table has one role; the role is its schema, its
+> pool, and its migration chain. Nothing crosses a role.
+
+### Migrations
+
+Migrations live with the OM, and the schema timeline is owned by the OM,
+not by any single service. A migration is a pair of SQL files, hand
+written and schema qualified, with a thin Python wrapper that Alembic
+runs:
+
+    om/migrations/sql/<role>/YYYYMMDDHHMM_<slug>.up.sql
+    om/migrations/sql/<role>/YYYYMMDDHHMM_<slug>.down.sql
+    om/migrations/versions/<role>/YYYYMMDDHHMM_<slug>.py   # run_sql(role, "...up.sql")
+
+One revision chain and one version table per role. The minute stamp is
+the file's sort key and the revision id, so two authors never negotiate
+a counter; two migrations that name the same parent are a real conflict
+between two schema changes, and the tool reporting it is the point. A
+migration file is never edited once it has been applied anywhere. The
+runner refuses a file that names a table of another role, and refuses
+to migrate one role when the caller meant all of them.
+
+A check that the ORM metadata and the migrated schema agree, for every
+role, is part of the fast test gate. A downgrade-then-upgrade of the
+latest revision is part of CI.
+
 ## 9. Infrastructure
 
-Storage covers persistence, but managers often need more than a place to
+Storage covers persistence, but managers need more than a place to
 keep rows. They need a cache to skip expensive reads, a bucket to park
-large blobs, a topic to hand work off asynchronously. These are
-infrastructure capabilities: cross-cutting toolkits, not a layer of
-their own. Managers (and web service impls, when needed) reach for them
-the same way they reach for a storage: as an interface injected through
-the constructor. The three-layer model from Section 6 still holds; infra
-is an add-on for concerns that the Business and Network layers cannot
-satisfy on their own.
+large blobs, a topic to hand work off asynchronously, a secret store to
+resolve a credential. These are infrastructure capabilities:
+cross-cutting toolkits, not a layer of their own. Managers (and service
+impls, when needed) reach for them the same way they reach for a
+storage: as an interface injected through the constructor. The
+three-layer model from Section 6 still holds; infra is an add-on for
+concerns that the Business and Network layers cannot satisfy on their
+own.
 
 ### Principles
 
 -   Every infra capability is fronted by an interface with swappable
-    impls. For example, a cache may have a local impl, a cloud impl, and
-    a mixed impl; the caller holds a `CacheInterface` and does not know
+    impls. For example, a cache has a local impl, a cloud impl, and a
+    mixed impl; the caller holds a `CacheInterface` and does not know
     which.
 -   Tenancy is explicit where it matters as a keying concern. Cache and
     buckets take `org_id` as a first-class parameter so a mistake cannot
-    cross tenants at the key level, and user-bound variants take
-    `user_id` on top, matching the Storage Layer rule. Topics take
-    `OpContext` on publish because an event carries routing context
-    beyond tenancy (app, user, trace); the impl pulls what it needs from
-    ctx when shaping the envelope. The split is deliberate, not
-    accidental.
--   Cross-tenant reference data (feature flags, schema metadata,
-    firmware signatures) uses `EMPTY_UUID` as the `org_id` on cache and
-    bucket calls. Impls treat it as a reserved system scope, so system
-    keys and tenant keys live in disjoint namespaces and a tenant caller
-    cannot read or write system data by mistake.
+    cross tenants at the key level. Topic payloads carry `org_id` so a
+    consumer can filter before it acts.
+-   Cross-tenant reference data uses `EMPTY_UUID` as the `org_id` on
+    cache and bucket calls. Impls treat it as a reserved system scope,
+    so system keys and tenant keys live in disjoint namespaces and a
+    tenant caller cannot read or write system data by mistake.
 -   Wire-up happens in the app container at boot. Managers and service
     impls receive infra handles through their constructors, never
     through globals, thread locals, or `OpContext`.
+-   Observability is the one capability used through its vendor API
+    directly (Section 16, Traces and Metrics).
+-   Every impl can `describe()` itself in one line, and the container
+    logs the chosen backends once at start, so an operator reading a
+    boot log knows exactly what a process is talking to.
 
 ### InfraInterface Root
 
@@ -613,11 +965,19 @@ class InfraInterface:
     def get_cache(self, scope: CacheScope) -> CacheInterface: ...
     def get_buckets(self) -> BucketsInterface: ...
     def get_topics(self) -> TopicsInterface: ...
+    def get_queues(self) -> QueueInterface: ...
+    def get_secrets(self) -> SecretsInterface: ...
+
+    async def start(self) -> None: ...
+    async def close(self) -> None: ...
 ```
 
 Each getter returns an interface. The concrete impl sitting behind it is
-chosen by the app container and can differ across environments (local
-dev, staging, production) without any manager changing.
+chosen by the app container from settings and can differ across
+environments (local dev, staging, production) without any manager
+changing. The root has a lifecycle because some capabilities do: a
+topic listener holds a connection and a queue holds a client, and both
+are opened at start and closed at shutdown in that order.
 
 ### Cache
 
@@ -628,37 +988,46 @@ each other's keys:
 ``` python
 class CacheScope(str, Enum):
     NETWORK_RESPONSE = "network_response"
-    BUSINESS_OM_SERIALIZATION = "business_om_serialization"
-
+    CATALOG_INDEX = "catalog_index"
+    RATE_LIMIT = "rate_limit"
 
 class CacheInterface:
     async def get(self, org_id: UUID, key: str) -> bytes | None: ...
     async def put(self, org_id: UUID, key: str, value: bytes, ttl: timedelta) -> None: ...
     async def invalidate(self, org_id: UUID, key: str) -> None: ...
+    async def increment(self, org_id: UUID, key: str, ttl: timedelta) -> tuple[int, timedelta]: ...
 ```
 
-A manager takes the cache it needs through its constructor:
+A manager takes the cache it needs through its constructor, already
+scoped:
 
 ``` python
-# platform/om/hiltesting/impl/hiltesting_manager_impl.py
-
-
-class HiltestingManagerImpl(HiltestingManagerInterface):
+class CatalogManagerImpl(CatalogManagerInterface):
     def __init__(
         self,
-        storage: HiltestingStorageInterface,
-        bench_manager: BenchManagerInterface,
+        storage: CatalogStorageInterface,
         cache: CacheInterface,  # scoped at wire-up time
     ):
         self._storage = storage
-        self._bench_manager = bench_manager
         self._cache = cache
 ```
 
 `org_id` is passed explicitly on every call, so keys from different
 tenants cannot collide even when they share the same logical name. A
-user-bound variant (`UserCacheInterface`) can take `user_id` on top of
-`org_id` when the cached value is personal to a user within a tenant.
+value that is personal to a user carries the user id inside the key.
+
+`increment` is the one atomic primitive, and it exists for two things:
+rate limits (Section 10) and generations. A cache backend can delete an
+exact key but cannot enumerate a tenant's keys cheaply, so a read cache
+is treated as a **projection** with a generation: every entry's key
+carries the tenant's generation number, and a write bumps the number
+with one `increment`. Every older entry is orphaned at once without
+being listed and expires by TTL. The TTL is a backstop for writes that
+bypass the manager, never the primary invalidation.
+
+A cache fails open. A miss is always an acceptable answer, and a
+backend that cannot be reached is a miss, not an error. Nothing that
+must be correct is kept only in a cache.
 
 Caching is a business-layer concern. The storage layer does not wrap
 reads in a cache; a storage impl talks to its database and nothing else.
@@ -667,127 +1036,188 @@ read is understood.
 
 ### Buckets
 
-Buckets are for large blobs: run artifacts, user uploads, snapshots. The
-shape is S3-like and deliberately simple:
+Buckets are for large blobs: generated documents, user uploads,
+exports. The shape is S3-like and deliberately simple:
 
 ``` python
 class Buckets(str, Enum):
-    RUN_ARTIFACTS = "run-artifacts"
+    ORDER_DOCUMENTS = "order-documents"
     USER_FILE_UPLOADS = "user-file-uploads"
-    BENCH_SNAPSHOTS = "bench-snapshots"
-
+    PRODUCT_IMAGES = "product-images"
 
 class BucketsInterface:
-    async def put(self, org_id: UUID, bucket: Buckets, key: str, data: bytes) -> None: ...
+    async def put(self, org_id: UUID, bucket: Buckets, key: str, data: bytes, content_type: str) -> None: ...
     async def get(self, org_id: UUID, bucket: Buckets, key: str) -> bytes: ...
+    async def exists(self, org_id: UUID, bucket: Buckets, key: str) -> bool: ...
     async def list(self, org_id: UUID, bucket: Buckets, prefix: str) -> list[str]: ...
     async def delete(self, org_id: UUID, bucket: Buckets, key: str) -> None: ...
+    async def presign_get(self, org_id: UUID, bucket: Buckets, key: str, ttl: timedelta) -> str | None: ...
+    async def presign_put(self, org_id: UUID, bucket: Buckets, key: str, content_type: str, ttl: timedelta) -> str | None: ...
 ```
 
 Keys are plain strings, but nothing prevents a manager from laying them
 out as nested paths when that helps:
 
-    test-runs/<run_id>/artifacts/report.html
-    test-runs/<run_id>/logs/device-0.log
-    benches/<bench_id>/snapshots/<snapshot_id>.tar.zst
+    orders/<order_id>/invoices/<invoice_id>.pdf
+    orders/<order_id>/packing-slips/<shipment_id>.pdf
+    products/<product_id>/images/<image_id>.webp
 
 Tenancy is explicit: every call takes `org_id`, and the impl prefixes
-storage keys with it internally so one tenant's artifacts cannot be read
-or listed by another. A user-bound variant can take `user_id` on top
-when the blobs belong to a single user (uploaded avatars, per-user
-exports).
+storage keys with it internally so one tenant's blobs cannot be read
+or listed by another. Presigned URLs let a browser or a remote process
+move bytes directly to and from the store, with a short expiry; the
+service never proxies a large upload through its own memory. A local
+filesystem impl with the same layout serves development and tests.
 
 ### Topics
 
-Topics are for asynchronous work and fan-out. A producer publishes an
-event; one or more consumers react to it. Topic names are fixed by enum;
-payload types are fixed by a payload map:
+Topics are for wake-ups and live updates: a producer publishes an
+event; every interested process reacts to it. Topic names are fixed by
+enum; payload types are fixed by a payload map; every payload extends
+one base:
 
 ``` python
+class TopicPayload(Platform):
+    idempotency_key: UUID  # uuid_v7, set by the producer
+    produced_at: datetime
+    org_id: UUID
+
 class Topics(str, Enum):
-    DOCUMENT_TO_BE_VECTORIZED = "document_to_be_vectorized"
-    RUN_FINISHED = "run_finished"
+    ORDER_PLACED = "order_placed"
+    SHIPMENT_UPDATED = "shipment_updated"
+        CATALOG_IMPORTED = "catalog_imported"
+    WORK_AVAILABLE = "work_available"
 
-
-TOPIC_PAYLOADS: dict[Topics, type[BaseModel]] = {
-    Topics.DOCUMENT_TO_BE_VECTORIZED: DocumentToBeVectorizedPayload,
-    Topics.RUN_FINISHED: RunFinishedPayload,
+TOPIC_PAYLOADS: dict[Topics, type[TopicPayload]] = {
+    Topics.ORDER_PLACED: OrderPlacedPayload,
+    Topics.SHIPMENT_UPDATED: ShipmentUpdatedPayload,
+        Topics.CATALOG_IMPORTED: CatalogImportedPayload,
+    Topics.WORK_AVAILABLE: WorkAvailablePayload,
 }
 
-
 class TopicsInterface:
-    async def publish(self, ctx: OpContext, topic: Topics, payload: BaseModel) -> None: ...
+    async def publish(self, topic: Topics, payload: TopicPayload) -> None: ...
     def subscribe(
         self,
         topic: Topics,
         consumer: str,
-        handler: Callable[[OpContext, BaseModel], Awaitable[None]],
-        exclusive: bool = False,
-    ) -> None: ...
+        handler: Callable[[TopicPayload], Awaitable[None]],
+    ) -> Callable[[], None]: ...  # returns an unsubscribe
 ```
 
-`consumer` is a logical consumer-group name, not a process. Multiple
-instances of the same service can subscribe with the same `consumer`
-value and the broker will load-balance messages across them: horizontal
-scaling falls out automatically. Different consumers on the same topic
-each get their own copy of every event, so fan-out and load-balancing
-work at the same time.
+Delivery is at-least-once to every subscribed process, and nothing is
+delivered to a process that was not subscribed at the time. That is the
+contract, and it is what makes the bus cheap: a database's
+`LISTEN/NOTIFY`, a pub/sub channel on the cache, or an in-process
+dispatcher for tests all satisfy it. Durable work never rides a topic.
+It is a row in the work queue (Section 11); the topic only says "there
+is work", and a missed notification degrades to polling latency, never
+to lost work.
 
-`exclusive` controls how many different consumer types a topic allows,
-not how many processes. With `exclusive=False`, many consumer types
-subscribe and each receives every event; `RUN_FINISHED` is a natural
-fit, with reporting, notifications, and analytics all reacting to the
-same event. With `exclusive=True`, only one consumer type is allowed;
-`DOCUMENT_TO_BE_VECTORIZED` is a good example, since exactly one
-vectorization pipeline should claim each document.
-
-### Idempotency
-
-Delivery is at-least-once. This is the nature of a message bus: a broker
-may redeliver a message if a consumer crashes before acknowledging, an
-operator may replay a topic to backfill a new consumer or recover from a
-bad deploy, a flaky client may publish the same request twice when its
-connection blips. Handlers must be safe to run more than once with the
-same payload.
-
-The usual recipe is a producer-generated idempotency key on the payload
-(typically a `uuid_v7`) combined with either a storage-level upsert
-keyed on it, or a small dedupe table the handler checks before acting. A
-payload base captures the convention in one place:
-
-``` python
-class TopicPayload(BaseModel):
-    idempotency_key: UUID  # uuid_v7, set by the producer
-    produced_at: datetime
-```
-
-Every topic payload extends `TopicPayload`, so every handler has a key
-to dedupe on without thinking. This rule holds for every topic, whether
-`exclusive` or not, and for every inbox or outbox queue layered on top
-(see Section 10, Idempotency on the Consumer Side).
+`consumer` names the subscriber for logs and metrics. `subscribe`
+returns an unsubscribe callable, because the most common subscriber is
+a socket handler that lives exactly as long as one connection.
 
 Because the producer sets `idempotency_key` at construction time, it
 also serves as the observable id throughout the pipeline: producers and
 consumers both log it, and anyone tracing a message end to end uses it.
-That is why `publish()` returns `None`; a broker-assigned id (a Kafka
-offset, an SQS `MessageId`, a JetStream seq) carries no durable meaning
-across retries, replays, or broker changes, and surfacing it would leak
-technology through the interface.
+That is why `publish()` returns `None`; a broker-assigned id carries no
+durable meaning across retries, replays, or broker changes, and
+surfacing it would leak technology through the interface.
+
+> **Python tip:** a database-backed bus caps the payload size (about
+> 8 KB on Postgres). The impl trims a payload that would not fit,
+> marks it `truncated`, and the consumer re-reads the record from
+> storage. Consumers written that way work unchanged on a bus with no
+> cap.
+
+### Queues
+
+A queue is for work whose producer is outside the platform and cannot
+be told to wait: inbound webhooks, partner deliveries, bulk uploads.
+This is the inbound queue for outside producers; durable internal work
+is the work table of Section 11.
+The shape is that of a hosted queue service, so the cloud impl is thin
+and the in-process impl is a faithful twin:
+
+``` python
+class Queues(str, Enum):
+    WEBHOOKS = "webhooks"
+
+class QueueInterface:
+    async def send(self, queue: Queues, body: bytes, *, dedup_id: str | None = None) -> str: ...
+    async def receive(self, queue: Queues, max_messages: int, wait: timedelta, visibility: timedelta) -> list[QueueMessage]: ...
+    async def delete(self, queue: Queues, receipt: str) -> None: ...
+    async def change_visibility(self, queue: Queues, receipt: str, visibility: timedelta) -> None: ...
+    async def depth(self, queue: Queues) -> QueueDepth: ...  # visible, in flight, dead-lettered
+```
+
+A queue delivers at least once and does not deduplicate; the durable
+"processed exactly once" guarantee belongs to the consumer (Section 10,
+Idempotency on the Consumer Side). Dead letters are visible, not
+silent: a message that fails its last attempt lands in a dead-letter
+queue, an audit entry names it, and a metric counts it.
+
+### Secrets
+
+Secrets are a capability, not a domain. A secret store holds values;
+the object model holds only **references** to them:
+
+``` python
+class SecretsInterface:
+    async def get(self, name: str) -> str: ...  # raises SecretNotFound
+    async def has(self, name: str) -> bool: ...
+    async def put(self, name: str, value: str) -> None: ...
+    async def delete(self, name: str) -> None: ...
+```
+
+A `CarrierIntegration` entity carries `credential_ref: str`, the name
+of a secret, never the value. The value is resolved at the point of use, for
+exactly one operation, and discarded. It never enters an entity, a log
+line, an audit payload, an error message, or the environment of a
+subprocess. Error messages name the secret and the store it was looked
+up in, so an operator knows what to add without anything being
+revealed.
+
+The local impl reads environment variables and an owner-only file; the
+cloud impl talks to the managed secret manager. A process that names
+itself staging or production and finds the file backend configured
+refuses to start. The refusal lives in the process, not in a deployment
+checklist.
+
+### Idempotency
+
+Every topic payload, every queued message, and every work item carries
+a producer-set `idempotency_key` by construction, so every handler has
+something to dedupe on without thinking. Section 10 (Idempotency on the
+Consumer Side) states the handler rule once, for every kind of queue.
 
 ## 10. The Network Layer
+
+### How It Starts and Where It Goes
+
+A system starts as one API process. It hosts one router module and one
+wire-types module per OM namespace behind one gateway, plus the
+realtime channel, and it runs next to a small number of worker
+processes. That is the right first shape: the operational boundaries
+that matter at the start are between interactive traffic and
+background work, not between namespaces, and one process is the
+cheapest thing to deploy, observe, and debug.
+
+Growth is mechanical because the namespace boundary is a module
+boundary from day one. Splitting a namespace out into its own service
+moves a router module and a types module into a new container and
+changes nothing a manager sees. The rest of this section describes the
+target: the services a complex system ends up with, and the rules that
+keep them honest along the way.
 
 ### Web Services as Scalability Units
 
 Web services are the network layer's scalability units. Each major OM
-namespace gets its own service: `benches` has `bench-api`, `hiltesting`
-has `hiltesting-api`, and so on. Splitting along namespace lines lets
-each service be scaled, versioned, and deployed independently, and lets
+namespace gets its own service: `catalog` has `catalog-api`, `orders`
+has `orders-api`, and so on. Splitting along namespace lines lets each
+service be scaled, versioned, and deployed independently, and lets
 products mix which services they expose.
-
-Services earn their keep in three ways: they are the scalability unit of
-the platform, they are the surface that apps (the products built on top)
-consume, and they are the surface that external API users (CI/CD
-systems, partners, anyone with a token) consume.
 
 A service runs in its own container with the whole OM library available
 to it. Within that container, the service impl can call any OM manager
@@ -796,8 +1226,8 @@ calling another over the wire) is intentionally rare: most logic is
 centralized in OM managers, and a service impl almost always completes
 its work by composing managers locally. A service-to-service call is
 reserved for workflows that exceed a single manager's scope, for example
-a hiltesting workflow that needs to reserve a bench before running a
-test (see Direction of Calls).
+an order workflow that needs to reserve stock before it commits (see
+Direction of Calls).
 
 ### Domain Services vs App-Specific Services
 
@@ -805,32 +1235,35 @@ Two kinds of web services exist, and they share the same structural
 pattern:
 
 -   **Domain services** wrap one OM namespace each and expose its
-    operations to any caller. `bench-api`, `hiltesting-api`,
-    `user-mgmt-api`, `docs-api`. Both external API users and the
-    platform's own apps call them.
+    operations to any caller. `catalog-api`, `orders-api`, `tenancy-api`.
+    External API users call them directly; the platform's apps reach
+    them through their backing service.
 -   **App-specific services** exist for the needs of a single client
-    app: `portal-web-svc`, `cli-web-svc`, `desktop-web-svc`. Each
-    composes domain services to serve the exact shape its client needs,
-    and holds any logic that is only meaningful for that app (session
-    shape, client-specific aggregations, per-app rate limits).
+    app: `portal-web-svc`, `cli-web-svc`. Each composes domain services
+    to serve the exact shape its client needs, and holds any logic that
+    is only meaningful for that app (session shape, client-specific
+    aggregations, per-app rate limits).
 
-App-specific services tend to be thin because most of their work is
+App-specific services are thin because most of their work is
 delegating to domain services. They exist so client apps can stay dumb:
 an app talks to its own backing service; that service does the
-composition.
+composition. In the single-process start, an app-specific service is a
+router module that composes managers on behalf of one app, and every
+request carries an app type on its context so app-aware branches stay
+explicit.
 
 ### At a Glance
 
 ``` mermaid
 flowchart TD
     User[Product users]
-    API[External API users<br/>CI/CD, partners]
-    App[Apps<br/>CLI / Portal / Desktop]
+    API[External API users<br/>partners, integrators]
+    App[Apps<br/>Portal / CLI / Operator console]
     GW[Gateway<br/>auth + OpContext]
-    AppSvc[App-specific services:<br/>portal-web-svc<br/>cli-web-svc<br/>desktop-web-svc]
+    AppSvc[App-specific services:<br/>portal-web-svc<br/>cli-web-svc]
 
-    subgraph SvcContainer [" "]
-      DomSvc[Domain services:<br/>bench-api<br/>hiltest-api<br/>docs-api<br/>user-mgmt-api<br/>secret-mgmt-api]
+    subgraph SvcContainer [Service container]
+      DomSvc[Domain services:<br/>catalog-api<br/>orders-api<br/>inventory-api<br/>tenancy-api]
       Core[Lib: OM + Storage]
       DomSvc --> Core
     end
@@ -852,56 +1285,53 @@ them horizontally, and that stays cheap only if services are treated as
 ephemeral from a deployment perspective: kill one, start a fresh one
 elsewhere, and the system keeps running. The test is reconstitutability.
 If a process's in-memory content can be rebuilt from durable sources
-(storage, cache, queues, a small registry), it counts as ephemeral
-regardless of what it holds in RAM at any given moment. If the process
-is the only place a piece of information exists, horizontal scaling
-breaks.
+(storage, cache, queues), it counts as ephemeral regardless of what it
+holds in RAM at any given moment. If the process is the only place a
+piece of information exists, horizontal scaling breaks.
 
 Domain services are always stateless. They read from storage, write to
 storage, publish events, and return. A warm cache, a preloaded index, a
-cached IDL schema, a per-process rollup of an expensive computation are
-all fine; they rebuild at boot. What a domain service must never do is
-hold information that exists nowhere else. This rule has no exceptions,
-including for cases that feel stateful on the surface like
-`notification-svc` (see the case study at the end of this section).
+per-process rollup of an expensive computation are all fine; they
+rebuild at boot. What a domain service must never do is hold
+information that exists nowhere else.
 
 App-specific services may be lightly stateful, but only when a client
 opens a long-lived transport. A WebSocket or a gRPC stream is state by
 its very nature: the kernel holds an open socket and that socket is
 bound to a single process. This is the one case where a service
 unavoidably holds something the rest of the system does not. The rule is
-narrow: the only thing a lightly stateful app-specific service keeps in
-its memory is the open connection itself. No session data, no user
-preferences, no accumulated context. Those are recovered on demand from
-storage, cache, or a presence store. The patterns further down in this
-section (starting at Dealing with 'Stateful' Services: Inbox and Outbox
-Queues) show how this rule is implemented in practice.
+narrow: the only thing a lightly stateful service keeps in its memory
+is the open connection, the subscriptions the client asked for on it,
+and a bounded buffer of frames waiting to be written. No session data,
+no user preferences, no accumulated context. Those are recovered on
+demand from storage or cache. Realtime at the Edge, below, shows how.
 
 > **Principle:** Domain services are always stateless. App-specific
-> services may hold only the open socket and its queues; never session
-> data or user context.
+> services hold only the open socket, its subscriptions, and a
+> bounded buffer; never session data or user context.
 
 ### Service Interfaces and Impls
 
 The network layer follows the same interface/impl pattern as managers
 and storages. Each service declares its network operations through a
-`ServiceInterface`; the impl handles HTTP wiring. A `ServicesInterface`
+`*ServiceInterface`; the impl handles HTTP wiring. A `ServicesInterface`
 plays the role of the network-layer root:
 
 ``` python
-class BenchServiceInterface:
-    async def get_benches(self, ctx: OpContext) -> list[BenchView]: ...
-    async def get_bench(self, ctx: OpContext, bench_id: UUID) -> BenchView: ...
-
+class WarehouseServiceInterface:
+    async def get_warehouses(self, ctx: OpContext) -> list[WarehouseView]: ...
+    async def get_warehouse(self, ctx: OpContext, warehouse_id: UUID) -> WarehouseView: ...
 
 class ServicesInterface:
-    def get_bench_service(self) -> BenchServiceInterface: ...
+    def get_warehouse_service(self) -> WarehouseServiceInterface: ...
 
     # one getter per service
 ```
 
-The impl handles POST/GET routing, request and response serialization,
-and translation between the public types and the OM entities.
+The impl handles routing, request and response serialization, and
+translation between the public types and the OM entities. A router translates: it builds the entity or the arguments from the
+request, calls one manager, and projects the result onto a view. When
+a router starts deciding something, the decision moves into a manager.
 
 ### The Gateway
 
@@ -909,40 +1339,68 @@ A gateway sits in front of the services. It is the only layer that talks
 to the public internet. It authenticates requests, builds `OpContext`,
 and routes to the right service. Services themselves never construct
 `OpContext` from raw headers or tokens; by the time a service method is
-called, the context is already populated.
+called, the context is already populated. In the single-process start
+the gateway is a package of middleware and request dependencies inside
+the API process; the responsibilities are the same.
 
-`OpContext` is immutable. Once built by the gateway, it flows through
-every downstream call unchanged. No layer adds, replaces, or mutates its
-fields mid-request. If an operation needs a narrower view (for example,
-an admin override or a narrowed permission set), it is passed as an
-explicit argument, not by mutating `ctx`.
+The gateway owns a short list of edge concerns, each done once:
 
-### Auth: Gateway vs. Dedicated Service
+-   **Credentials.** Every credential kind has a distinct prefix (an
+    API key, a session token, a login credential, a single-use socket
+    ticket, an invitation link), and the prefix decides which
+    dependency will accept it. A machine caller presents an API key
+    that is membership-scoped, expiring, and role-capped at its
+    issuer's role. A person signs in with a credential that carries no
+    tenant and exchanges it for a tenant-scoped session token, so the
+    same person in two tenants is one identity with two memberships.
+-   **Sockets.** A long-lived connection is opened with a single-use,
+    short-lived ticket minted by an authenticated request, never with a
+    long-lived credential in a URL. Redeeming the ticket re-checks the
+    credential behind it.
+-   **Request id.** The gateway accepts an inbound `x-request-id` or
+    mints one, stamps it on the context, echoes it in the response
+    header, and attaches it to the log context and the trace span.
+-   **Error envelope.** One handler translates `PlatformException` (Section 16, Exceptions) into `{"error": {"code", "message", "request_id"}}`
+    with the status the exception names; one catch-all turns anything
+    else into a 500 with the same shape. Routers never set error status
+    codes.
+-   **Rate limits.** A per-route dependency counts in the shared cache
+    (`CacheInterface.increment`) so every replica shares one budget.
+    The subject is the credential id; an unauthenticated route keys on
+    the client address; an inbound-webhook route keys on a digest of
+    its path token. A rejection is `429` with `Retry-After` and the
+    error envelope. The limits fail open: they guard against runaway
+    clients and are not a security boundary.
+-   **Edge idempotency.** A creating `POST` accepts an
+    `Idempotency-Key` header. The first response is stored per tenant
+    under the key and replayed on a retry, using the same storage
+    primitive the queue handlers use.
+-   **Health.** `/healthz` answers liveness with the version and no
+    I/O; `/readyz` awaits the storage healthcheck; `/metrics` exposes
+    counters and histograms. All three sit outside the versioned API.
+-   **Versioning.** The API prefix (`/v1`) is applied once, where
+    routers are mounted. Routers declare only their own sub-paths.
 
-A recurring design choice: put auth entirely in the gateway, or keep a
-dedicated `AuthService` behind it.
+The operator plane has its own gate. It resolves the bearer to an
+identity, admits it only when the identity is on the operator
+allowlist **and** the credential is the person's own sign-in (never an
+API key, never a session minted from an invitation someone else
+issued), and produces an `AdminContext` (Section 5). Operator routes
+live under `/v1/admin/*`, are served by the same process, and cannot
+reach a tenant manager because no `OpContext` exists on that path.
 
-Recommended: the gateway verifies tokens; a dedicated `AuthService` owns
-the user and tenant model, issues tokens, and handles everything that is
-"about" identity. The gateway stays stateless and fast, while
-`AuthService` is a regular service with its own OM namespace
-(`platform.om.auth`) and storage.
+### Auth: the Gateway Verifies, the Tenancy Domain Owns
 
-Rationale: auth has business logic (signup, invite, MFA, permission
-management) that belongs in the OM like any other domain. A thin gateway
-can verify tokens and call into `AuthService` when it needs user detail,
-but it should not own the auth domain itself. This keeps `AuthService`
-testable and replaceable the same way every other service is, and avoids
-turning the gateway into a smart monolith.
-
-When the need grows beyond authentication (for example, generating,
-rotating, and delivering public/private key pairs for devices, CI
-runners, or partner integrations), that work does not belong in
-`AuthService`. It gets its own domain service, `secret-mgmt-api`, backed
-by a `platform.om.secrets` namespace and its own storage. Keeping
-identity and secrets apart prevents one domain's concerns from bloating
-the other, and lets them be scaled, audited, and deployed on their own
-terms.
+The gateway verifies credentials. The tenancy namespace owns the
+identity model (organizations, identities, users, memberships, teams,
+credentials, sessions, invitations) and issues tokens, as a regular
+namespace with its own OM types, manager, and storage, and in a split
+deployment a regular domain service. Auth has business logic (signup,
+invite, role management, key rotation, session refresh) that belongs in
+the OM like any other domain. The gateway asks the tenancy manager for
+the principal behind a credential and owns nothing else, which keeps it
+stateless and fast and keeps identity testable and replaceable the same
+way every other namespace is.
 
 ### Intra-Service Communication
 
@@ -950,124 +1408,116 @@ All services run in the same local or virtual network.
 Service-to-service calls never cross the public internet, and TLS is not
 required for intra-service traffic. This simplifies the transport and
 keeps service impls focused on business concerns, not certificate
-rotation.
+rotation. Managed backends that accept only TLS are configured with it;
+that is a connection string, not an architectural concern.
 
-### REST + gRPC Twin
+Outbound TLS verification uses the operating system's trust store, in
+every process, so a corporate proxy or a private certificate authority
+works without per-component configuration.
 
-Each REST service has a gRPC companion generated from the same IDL. The
-gRPC service is an auto-generated wrapper with zero business logic: it
-delegates every call to the same underlying `ServiceInterface`. Protos
-and scaffolding are generated, never hand-written.
-
-REST and gRPC deploy in the same pod, each on a different port. They
-never talk over the public network, and clients on the same virtual
-network can pick either protocol without extra infrastructure.
-
-### Public Types via IDL
+### Public Types
 
 The OM is the source of truth for entities. What a service exposes on
-the wire is a selective projection of those entities, defined in an IDL
-(OpenAPI or Protobuf) and generated into Python types. The IDL decides
-which fields are public, which are renamed, and which are omitted. The
-OM never changes to match the wire format.
+the wire is a selective projection of those entities: a curated view
+that decides which fields are public, which are renamed, and which are
+omitted. The OM never changes to match the wire format.
 
-Each service owns its own IDL and its own generated types. `bench-api`
-owns `BenchView`, `hiltesting-api` owns `TestResultView`. Translation
-between the public view and the OM entity lives in the service impl,
-using the same one-to-one helper pattern as storage translation when
-fields align.
+Wire types are hand-written Pydantic classes in the service's `types/`
+module, one module per namespace, on two bases:
 
-Generated IDL types are immutable, like OM entities. They are wire
-snapshots, not live objects. A service may hand the same view to
-multiple callers; mutating one would mislead the others and would not
-reach back to the OM entity behind it.
+``` python
+class View(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+class RequestBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+class WarehouseView(View):       # wire shape; curated, not auto-derived from Warehouse
+    id: UUID
+    name: str
+    address: str
+
+class AddWarehouseRequest(RequestBody):  # input shape; no id or timestamps, the server assigns them
+    name: str
+    address: str
+    timezone: str
+
+class ErrorResponse(View):
+    error: ErrorBody  # code, message, request_id
+```
+
+Views are immutable, like OM entities. They are wire snapshots, not
+live objects. A service hands the same view to many callers;
+mutating one would mislead the others and would not reach back to the
+OM entity behind it. Requests forbid unknown fields, so a client that
+sends a misspelled key learns about it at once.
+
+Naming is fixed: `...View` for anything returned, `...Request` for
+anything accepted, `Issued...View` for the one response that carries a
+freshly minted secret in the clear. Lists return a bare list with a
+server-clamped `limit`; an append-only stream pages by a monotonic
+sequence number (`after_seq`) instead of an offset.
+
+> **Python tip:** `from_attributes=True` makes
+> `WarehouseView.model_validate(warehouse)` the whole translation when
+> field names line up. A module-private `_view()` helper in the router
+> covers the cases where they do not.
 
 ### From OM to Wire
 
-To make the flow concrete, follow one entity end to end. `Bench` lives
-in the OM; the IDL decides what the wire looks like:
-
-``` yaml
-# platform/services/bench/idl/openapi.yaml
-components:
-  schemas:
-    BenchView:        # wire shape; curated, not auto-derived from Bench
-      type: object
-      properties:
-        id:          { type: string, format: uuid }
-        name:        { type: string }
-        description: { type: string }
-        ssh_host:    { type: string }
-    AddBenchRequest: # input shape; no id/timestamps, server assigns them
-      type: object
-      properties:
-        name:        { type: string }
-        description: { type: string }
-        ssh_host:    { type: string }
-```
-
-`BenchView` is close to `Bench` but decided separately; the IDL can
-omit, rename, or add fields without the OM changing. `AddBenchRequest`
-carries no identity or timestamps, because those are server-assigned.
-
-A single build-time pass generates both transports from the same IDL:
-REST router and typed request/response classes, plus a `.proto` and a
-gRPC server wrapper. Both shells delegate to the same hand-written
-`BenchServiceInterface` impl.
+To make the flow concrete, follow one entity end to end. `Warehouse`
+lives in the OM; the view decides what the wire looks like; the router
+is the shell that connects them; the OpenAPI document is emitted from
+the running app and is the contract every client builds against.
 
 ``` mermaid
 flowchart LR
-    OM[OM types<br/>Bench, etc.<br/>platform/om/...]
-    IDL[IDL<br/>openapi.yaml<br/>services/bench/idl/]
-    GR[gen_rest.py]
-    GG[gen_grpc.py]
+    OM[OM types<br/>Warehouse<br/>platform/om/...]
+    View[Wire types<br/>WarehouseView, AddWarehouseRequest<br/>services/inventory/types/]
+    Router[Router<br/>hand-written, three lines per route]
+    OpenAPI[openapi.json<br/>emitted by the app,<br/>committed, diffed in CI]
 
-    subgraph Generated [Generated per service]
+    subgraph Clients [Client types, one per language]
         direction TB
-        RestRouter[REST router<br/>+ BenchView, AddBenchRequest]
-        Proto[.proto + gRPC server wrapper]
+        TsTypes[apps/portal/src/api/schema.d.ts<br/>generated from openapi.json]
+        PyClient[platform/clients/python/<br/>typed client over httpx]
     end
 
-    SvcImpl[BenchServiceInterface + Impl<br/>hand-written]
+    OM -. projected selectively .-> View
+    View --> Router
+    Router --> OpenAPI
+    OpenAPI --> TsTypes
+    OpenAPI --> PyClient
 
-    subgraph Clients [Generated clients - one per language]
-        direction TB
-        PyClient[platform/clients/python/<br/>bench_api_client/]
-        TsClient[platform/clients/ts/<br/>bench-api-client/]
-    end
-
-    OM -. projected selectively .-> IDL
-    IDL --> GR --> RestRouter
-    IDL --> GG --> Proto
-    RestRouter -->|delegates to| SvcImpl
-    Proto -->|delegates to| SvcImpl
-    IDL --> PyClient
-    IDL --> TsClient
-
-    style SvcImpl fill:#eef
+    style Router fill:#eef
     style OM fill:#efe
-    style IDL fill:#fef
+    style View fill:#fef
 ```
 
-### Generated Clients Live in One Place
+`WarehouseView` is close to `Warehouse` but decided separately; the
+view can omit, rename, or add fields without the OM changing.
+`AddWarehouseRequest` carries no identity or timestamps, because those
+are server-assigned.
 
-> **Principle:** One generated client package per language per service.
-> Every consumer imports it; nobody regenerates their own.
+The OpenAPI document is generated by the app and committed. CI
+regenerates it and fails on a diff, so a pull request that changes the
+API surface shows the change in the document, and no one can change a
+view without the contract following.
 
-A service is accessed in exactly one way, so its client proxy is
-generated in exactly one place per language. Regenerating in every
-consumer duplicates work and invites drift when someone rebases a stale
-copy against a newer IDL.
+### Clients Live in One Place
 
-    platform/clients/python/bench_api_client/   # generated once from the IDL
-    platform/clients/ts/bench-api-client/       # generated once from the IDL
+> **Principle:** One client per language per service. Every consumer
+> imports it; nobody builds their own.
 
-Consumers import the typed client they need and call only the methods
-they use. When the IDL changes, CI regenerates both packages, and every
-consumer picks up the new types on the next build; the import path is
-the version. The same package holds both REST and gRPC under a uniform
-surface, so a consumer swaps transports by changing the handle it
-constructs, not its imports.
+A service is accessed in exactly one way, so its client lives in exactly
+one place per language. A TypeScript app generates its types from the
+committed OpenAPI document into one file, re-exports the names it uses
+through a curated facade so feature code never imports generated paths,
+and wraps transport in one small hand-written client that knows the
+error envelope and the request id. A Python consumer imports one typed
+client package built the same way. When the document changes, the
+generated types change on the next build, and every consumer picks up
+the new shapes; the import path is the version.
 
 ### Direction of Calls
 
@@ -1089,41 +1539,35 @@ Calls flow downward through the layers, never upward:
     Dependencies) but cannot reach up to managers or services.
 
 Cross-service orchestration therefore lives in the service impl, not in
-the OM. Running a hiltesting test, for example, needs a reserved bench.
-Reserving a bench is complex enough to be a service-level operation
-(availability, concurrency, notifications), which is why it lives in
-`bench-api` rather than only in `BenchManager`. The hiltesting service
-impl orchestrates:
+the OM. Placing an order, for example, needs reserved stock. Reserving
+stock is complex enough to be a service-level operation (availability
+across warehouses, concurrency, notifications), which is why it lives in `inventory-api` and not only behind
+`InventoryManagerInterface`. The orders
+service impl orchestrates:
 
 ``` python
-# platform.services.hiltesting.impl (network layer)
+# platform.services.orders.impl (network layer)
 
-
-class HiltestingServiceImpl(HiltestingServiceInterface):
+class OrderServiceImpl(OrderServiceInterface):
     def __init__(
         self,
-        bench_service: BenchServiceInterface,
-        hiltesting_manager: HiltestingManagerInterface,
+        inventory_service: InventoryServiceInterface,
+        order_manager: OrderManagerInterface,
     ):
-        self._bench_service = bench_service
-        self._hiltesting_manager = hiltesting_manager
+        self._inventory_service = inventory_service
+        self._order_manager = order_manager
 
-    async def run_test(self, ctx: OpContext, req: RunTestRequest) -> TestRunView:
-        reserved_bench = await self._bench_service.reserve(ctx, req.bench_id)
-        test_run = await self._hiltesting_manager.run_test(
-            ctx,
-            req.source_bundle,
-            reserved_bench,
-        )
-        # translate test_run to TestRunView and return
-        ...
+    async def place_order(self, ctx: OpContext, req: PlaceOrderRequest) -> OrderView:
+        reservation = await self._inventory_service.reserve(ctx, req.lines)
+        order = await self._order_manager.place_order(ctx, req.customer_id, reservation)
+        return OrderView.model_validate(order)
 ```
 
 The service impl holds both a service-level dependency
-(`BenchServiceInterface`) and a manager-level dependency
-(`HiltestingManagerInterface`), both injected through the constructor.
-The OM hiltesting manager receives `reserved_bench` as a plain argument;
-it has no knowledge that a service was called to produce it.
+(`InventoryServiceInterface`) and a manager-level dependency
+(`OrderManagerInterface`), both injected through the constructor. The
+OM order manager receives `reservation` as a plain argument; it has no
+knowledge that a service was called to produce it.
 
 > **Principle:** Calls flow downward: services to services and managers;
 > managers to managers and storage; storage to storage. Nothing reaches
@@ -1135,196 +1579,127 @@ it has no knowledge that a service was called to produce it.
 > idempotent, keyed on a producer-generated idempotency key.
 
 Delivery is at-least-once in practice, regardless of whether a queue is
-backed by a broker topic or a database table. A client may retry a
-request after a flaky disconnect and produce a duplicate; a handler may
-do its work and then crash before marking the message processed, so the
-next run sees the same input again; an operator may replay a backlog to
-recover from a bad deploy. Message handlers must be safe to run more
-than once with the same payload.
+backed by a broker topic, a hosted queue, or a database table. A client
+may retry a request after a flaky disconnect and produce a duplicate; a
+handler may do its work and then crash before marking the message
+processed, so the next run sees the same input again; an operator may
+replay a backlog to recover from a bad deploy. Message handlers must be
+safe to run more than once with the same payload.
 
 The recipe is independent of the implementation: every message carries a
-producer-generated idempotency key (a `uuid_v7` is natural), and the
-handler dedupes before doing work, either through a storage-level upsert
-keyed on it or a small dedupe check. Each pipeline stage forwards the
-key and applies the same check. Section 9 shows this on `TopicPayload`;
-the same pattern fits a table-backed inbox row or any other shape a
-logical queue takes.
+producer-generated idempotency key (a `uuid_v7` is natural, an outside
+system's delivery id when the message came from outside), and the
+handler dedupes before doing work, through a unique index on the key or
+a storage-level upsert keyed on it. Each pipeline stage forwards the key
+and applies the same check. Section 9 shows this on `TopicPayload`; the
+same pattern fits a work item, a queued webhook delivery, and the
+`Idempotency-Key` header at the HTTP edge.
 
-### Dealing with 'Stateful' Services: Inbox and Outbox Queues
+### Realtime at the Edge
 
-A lightly stateful app-specific service sits between two queues scoped
-per user and connection: an inbox for messages the client sent, and an
-outbox for messages to deliver. The stream handler shuttles bytes in
-both directions only: socket to inbox, outbox to socket. A processor
-consumes the inbox, does its work through domain services, and produces
-onto the outbox. When the work is more than trivial, each pipeline stage
-gets its own queue so stages are independently restartable and scalable.
+A lightly stateful service holds sockets. Two questions follow: how a
+push produced anywhere in the system reaches the process holding the
+right socket, and what happens when a client is slower than its
+producer.
 
-"Queue" here is a logical concept, not necessarily a broker. For
-per-user-and-connection inbox and outbox, the natural implementation is
-a small set of database tables keyed by
-`(user_id, connection_id, seq, status)`, not the message-bus topics from
-Section 9. Topics fit a bounded number of logical streams, a handful per
-domain event type. They are a poor fit for potentially millions of
-short-lived queues that churn on every connect and disconnect. A
-table-backed inbox and outbox is cheap to create (insert a row), cheap
-to clean up (delete by `connection_id` or TTL), easy to scan per
-connection, and trivial to resume after a crash by picking up from the
-last acked `seq`.
+Pushes travel on the topic bus. Every process that holds sockets
+subscribes its handlers to the topics its clients care about; a
+producer publishes once; every replica receives the event and each
+socket handler filters by tenant and by the subscriptions its client
+registered. No process needs to know which replica holds which user,
+so nothing has to be looked up before publishing and nothing has to be
+kept in sync when a replica dies. Fan-out to replicas that hold no
+interested socket is the price, and it is the right price for a handful
+of replicas. When the replica count grows past that, a routing store
+mapping user to instance replaces the broadcast without any producer
+changing.
 
-Scoping per user and connection is load-bearing, not cosmetic. Ordering
-matters per conversation, not globally, and backpressure should push
-back on a noisy conversation without starving quiet ones. With a table,
-backpressure is a row-count check against the user's own outbox, applied
-locally. A single shared queue or table would couple every user into one
-ordering domain and one pressure domain, which is exactly what we are
-trying to avoid.
+Per socket, the process keeps one bounded outbox in memory and a
+drainer task that writes it to the wire. When the outbox is full, the
+oldest frame is dropped and the drop is logged. That is safe because
+nothing on the socket is the source of truth: every push is also a
+record, and a client that reconnects asks for everything after the
+last sequence number it saw. Replay from storage is the durability
+mechanism; the socket is a hint that something changed.
 
 ``` mermaid
 flowchart LR
-    Client[Client<br/>WebSocket / gRPC stream]
+    Prod[Producer<br/>manager / worker]
+    Bus[(Topic bus)]
 
-    subgraph AppSvc [App-specific service instance]
+    subgraph Replicas [Service replicas holding sockets]
         direction TB
-        StreamH[Stream handler<br/>shuttles bytes only]
-        Proc[Processor<br/>calls domain services]
-        Drain[Drainer<br/>writes to socket]
+        I1[Replica 1<br/>filter: tenant, subscriptions<br/>bounded outbox per socket]
+        I2[Replica 2<br/>filter: tenant, subscriptions<br/>bounded outbox per socket]
     end
 
-    subgraph Tables [DB tables, per user+connection]
-        direction TB
-        Inbox[(inbox<br/>user_id, connection_id,<br/>seq, status, payload)]
-        Outbox[(outbox<br/>user_id, connection_id,<br/>seq, status, payload)]
-    end
+    Sto[(Storage<br/>every push is a record)]
+    UserA[Client A]
+    UserB[Client B]
 
-    Domain[Domain services<br/>via ServiceInterface]
+    Prod -->|write record| Sto
+    Prod -->|publish once| Bus
+    Bus --> I1
+    Bus --> I2
+    I1 -->|drain| UserA
+    I2 -->|drain| UserB
+    UserA -.->|reconnect: after_seq| Sto
 
-    Client -->|incoming| StreamH
-    StreamH -->|insert| Inbox
-    Inbox -->|consume| Proc
-    Proc -->|call| Domain
-    Proc -->|insert| Outbox
-    Outbox -->|consume| Drain
-    Drain -->|outgoing| Client
-
-    style Tables fill:#fff8e6
-    style Domain fill:#eef
+    style Bus fill:#fff8e6
 ```
+
+Inbound traffic on the socket is small by design: subscribe,
+unsubscribe, ping. Commands travel over plain REST, where they get the
+error envelope, the rate limit, and the idempotency key for free.
 
 ### Wait-for-Response vs Fire-and-Forget
 
-The inbox and outbox substrate does not dictate how a caller uses it.
-Two patterns ride on top, and the choice is made per operation at the
-client.
+The choice between waiting and not waiting is made per operation at the
+client, and the server produces responses and notifications the same
+way in both cases.
 
-A CLI running a command over a gRPC stream typically pairs each outbound
-request with its response by correlation id and waits synchronously for
-that response. The stream is a reliable RPC with persistence: the
-command is durable the moment it hits the incoming queue, so the user
-can keep waiting through a network blip without losing the in-flight
-work. This is the right default for short operations where the user is
-at the terminal expecting an answer.
+A CLI running a short command calls the REST endpoint and waits for the
+response. A command that submits longer work gets an id back at once
+and, when the caller asked to wait, follows the record to completion
+and turns its outcome into an exit code. This is the right default for
+operations where the user is at the terminal expecting an answer.
 
-A long-running operation submitted from a portal or a desktop app is
-usually fire-and-forget from the app's perspective. The app publishes
-the request, returns to its event loop, and trusts a push notification
-to arrive on the outbound stream later when the work completes. This is
-the right default for operations measured in minutes or hours, and for
-flows where the user may close the app and reopen it later to see the
+A long-running operation submitted from a portal is fire-and-forget
+from the app's perspective. The app submits the request, receives an
+acknowledgement, returns to its event loop, and trusts a push on the
+realtime channel to arrive later when the work completes. This is the
+right default for operations measured in minutes or hours, and for
+flows where the user closes the app and reopens it later to see the
 result.
-
-Services produce responses and notifications onto the outbox the same
-way in both cases. The difference lives at the client: whether it holds
-a pending-correlation map while it waits, or treats every inbound
-message as a discrete notification to reconcile against its own durable
-state.
-
-Wait-for-response (CLI command over a gRPC stream):
-
-``` mermaid
-sequenceDiagram
-    participant CLI
-    participant Svc as App-specific service
-    participant Dom as Domain services
-
-    CLI->>Svc: request (corr_id=42)
-    Note over CLI: blocks on corr_id=42
-    Svc->>Dom: do work
-    Dom-->>Svc: result
-    Svc-->>CLI: response (corr_id=42)
-    Note over CLI: resolves pending call 42
-```
-
-Fire-and-forget (portal submits a long-running operation):
 
 ``` mermaid
 sequenceDiagram
     participant Portal
-    participant Svc as App-specific service
+    participant Svc as Service
     participant Wrk as Worker
-    participant Dom as Domain services
 
-    Portal->>Svc: request (start job)
-    Svc->>Wrk: enqueue task
-    Svc-->>Portal: ack (enqueued)
+    Portal->>Svc: POST (start catalog import)
+    Svc->>Svc: write record, enqueue work
+    Svc-->>Portal: 202 (record id)
     Note over Portal: returns to event loop
-    Wrk->>Dom: do work (minutes/hours)
-    Dom-->>Wrk: result
-    Wrk->>Svc: completion event
-    Svc-->>Portal: push (job-completed)
+    Wrk->>Wrk: do work (minutes)
+    Wrk->>Svc: publish (catalog_imported)
+    Svc-->>Portal: push envelope
     Note over Portal: reconciles against durable state
-```
-
-### Routing to the Right Process
-
-When a producer anywhere in the system needs to push a message to a user
-who happens to have an open socket, it must know which service instance
-is holding that socket. A presence registry, typically a small Redis,
-maps `user_id -> instance_id` and is updated on connect, disconnect, and
-lease expiry. Producers look up the target and write to the outgoing
-queue the target instance is draining. The registry's data lives in a
-shared store, not in any one process, so the service tier stays
-stateless even while individual instances hold live sockets. If an
-instance dies, its entries expire, the next connect from the affected
-users lands on a different instance, and the registry re-points
-accordingly.
-
-``` mermaid
-flowchart LR
-    Prod[Producer<br/>domain service / worker]
-    Reg[(Presence registry<br/>Redis<br/>user_id -> instance_id)]
-
-    subgraph Fleet [App-specific service fleet]
-        direction TB
-        I1[Instance #1<br/>holds user A socket]
-        I2[Instance #2<br/>holds user B socket]
-        I3[Instance #3<br/>idle]
-    end
-
-    UserA[User A]
-    UserB[User B]
-
-    Prod -->|1. lookup user A| Reg
-    Reg -->|2. instance #1| Prod
-    Prod -->|3. write to outbox| I1
-    I1 -->|drain| UserA
-    I2 -->|drain| UserB
-
-    I1 -.->|heartbeat| Reg
-    I2 -.->|heartbeat| Reg
-    I3 -.->|heartbeat| Reg
-
-    style Reg fill:#fff8e6
 ```
 
 ### Long-Running Orchestrations
 
 Work that takes minutes or hours is not process state; it is a durable
-record advanced by stateless workers. A twenty-minute test run lives as
-a row with a status and a cursor; a worker picks it up, does a step,
-updates the row, hands off. If the worker dies, another picks up at the
-persisted position. The same reconstitutability rule, applied at a
-longer horizon.
+record advanced by stateless workers. A twenty-minute catalog import
+lives as a row with a status and a cursor; a worker claims it, does a
+step, updates the row, hands off. If the worker dies, another picks up
+at the persisted position. The same reconstitutability rule, applied at
+a longer horizon.
+
+The claim is a separate row from the record it advances (the work item
+of Section 11), so one record can carry several kinds of work over its
+life and the queue can live in its own database role.
 
 ``` mermaid
 sequenceDiagram
@@ -1342,40 +1717,25 @@ sequenceDiagram
     Note over Row: advances regardless of<br/>which worker is alive
 ```
 
-### Case Study: Notification Service
+A record has three kinds of outcome, not two. It succeeds, it fails, or
+it **parks**: it stops with a reason and, where one is known, a time to
+resume, and it keeps everything it has achieved. A dependency that is
+unavailable right now, a limit an operator can raise, an input a person
+must supply: none of those mean the work did not work, and treating
+them as failure throws away the most expensive thing the system holds.
+A parked record is woken by the event that clears its reason, by a
+sweep when its resume time passes, or by a person.
 
-`notification-svc` delivers in-app notifications to users connected over
-the realtime channel (Section 12, Push-First Apps). It is not a
-cross-channel delivery service for email, SMS, or mobile push; those
-belong to their own services if and when they are ever needed. At first
-glance `notification-svc` feels stateful, with a backlog of pending
-notifications, a set of subscriptions, and a stream of pushes to users
-over time. Tracing its flow shows that none of that state lives in the
-service's memory.
-
-Subscriptions are rows. A user's subscription preferences and muted
-topics are stored in the notification domain and read on demand. Pending
-notifications are messages on a queue: the notification domain produces
-onto an outgoing topic, and a fan-out worker consumes it. For each
-target user, the worker looks up the active instance in the presence
-registry and writes onto the right app-specific service's outbox. The
-edge service drains the outbox into the user's held socket on the
-realtime channel. If the worker dies mid-flight, the broker redelivers
-and the idempotency key prevents a duplicate push.
-
-`notification-svc` is a stateless domain service, its workers are
-stateless consumers, and the only truly stateful piece in the chain is
-the app-specific service at the edge holding the sockets. Every instance
-at every tier can be killed and replaced without the system missing a
-message, which is the shape we want for every service in the platform.
+> **Principle:** A guard parks, a bound fails. A safety check leaves the
+> work resumable; only a real limit terminates it.
 
 ## 11. Worker Roles
 
 A distributed system is not just web services. Anything that runs on its
 own schedule, or drains a queue without a caller waiting on the other
-end, is a worker role: a process that reads a task, does work, writes a
-result, and optionally notifies someone. Workers sit next to web
-services, not inside them.
+end, is a worker role: a process that claims a unit of work, does it,
+writes a result, and optionally notifies someone. Workers sit next to
+web services, not inside them.
 
 ### Workers, Not Web-Service Side Jobs
 
@@ -1386,117 +1746,172 @@ Web services do not spawn background jobs or schedule recurring tasks.
 Every such need becomes an explicit worker role with its own container,
 its own deployment, and its own place in the service catalog. This keeps
 the rules from Section 10 meaningful. A stateless domain service that
-fires off a background job is no longer stateless: the job outlives the
+fires off a background job is not stateless: the job outlives the
 request, and the process is now the only place that remembers it is
-running. A lightly stateful app-specific service that schedules
-recurring work has extended its state well past the one open socket that
-justified being stateful in the first place. Pulling background work out
-as first-class components keeps the network tier honest and makes the
-work itself observable, restartable, and scalable on its own terms.
+running. Pulling background work out as first-class components keeps
+the network tier honest and makes the work itself observable,
+restartable, and scalable on its own terms.
+
+A topic subscriber that only forwards events to the sockets its own
+process holds is part of the network tier, not a job: it holds nothing
+the process does not already hold. Anything that writes, retries, or
+outlives a connection is a worker.
+
+### The Work Queue
+
+Durable background work is a row. A work item names what to do and
+for which record, carries the producer's idempotency key, and records
+its own claim:
+
+``` python
+class WorkItem(Identifiable, Trackable):
+    kind: WorkKind             # what to do
+    target_id: UUID            # the record it advances
+    idempotency_key: UUID      # unique
+        payload: Mapping[str, Any] = MappingProxyType({})
+    queue: str = "default"     # routing: "default", "region:<id>", ...
+    status: WorkStatus         # queued | claimed | done | failed
+    available_at: datetime     # not before
+    claimed_by: str | None = None
+    lease_expires_at: datetime | None = None
+    attempts: int = 0
+    max_attempts: int = 3
+    last_error: str | None = None
+```
+
+The queue lives in the `queue` database role (Section 8). Enqueue
+writes the row and then publishes `WORK_AVAILABLE` on the topic bus;
+claim is one storage method that selects the oldest available row in
+the named queue, skipping locked ones, and stamps the claim and the
+lease in the same statement. Completion marks the row done, requeues
+it with a growing delay, or fails it when attempts run out. A worker
+that finds an item is not its to run hands it back without spending an
+attempt. The queue name on the row is the routing: one table serves a
+shared pool and any number of dedicated lanes.
+
+Because the row carries `created_by`, the worker rebuilds the
+enqueuer's principal under a service role when it claims the item. The
+context the work runs under names the person who asked for it, so
+attribution and audit survive the asynchronous hop. Sweeps that act on
+every tenant ask the tenancy manager for one service context per live
+tenant.
 
 ### Shape of a Worker
 
-A worker is a small loop: pull from a source (a topic, a table-backed
-queue, a cron tick), do the work by calling OM managers and other
-services through their interfaces, write the result to storage, and if
-relevant produce a notification onto a topic. The same interface/impl
-split as the rest of the platform applies: a `WorkerInterface` declares
-the step, an impl delivers it. Handlers are idempotent by the rule from
+A worker is a small loop: claim from the queue when a slot is free,
+do the work by calling OM managers and other services through their
+interfaces, write the result to storage, and if relevant produce a
+notification onto a topic. Handlers are idempotent by the rule from
 Section 10 (Idempotency on the Consumer Side), so replays and
 at-least-once delivery stay safe.
 
 ``` python
-class TestResultPublisherInterface:
-    async def handle(self, ctx: OpContext, msg: TestCompleted) -> None: ...
+class WorkHandlerInterface:
+    async def handle(self, ctx: OpContext, item: WorkItem) -> None: ...
 
-
-class TestResultPublisherImpl(TestResultPublisherInterface):
+class ShipmentNotifierImpl(WorkHandlerInterface):
     def __init__(
         self,
-        hiltesting_mgr: HiltestingManagerInterface,
-        notify_svc: NotificationServiceInterface,
+        order_manager: OrderManagerInterface,
+        topics: TopicsInterface,
     ):
-        self._hiltesting = hiltesting_mgr
-        self._notify = notify_svc
+        self._order_manager = order_manager
+        self._topics = topics
 
-    async def handle(self, ctx: OpContext, msg: TestCompleted) -> None:
-        # dedupe on msg.idempotency_key, then:
-        summary = await self._hiltesting.get_run_summary(ctx, msg.run_id)
-        await self._notify.fan_out(ctx, summary)
+    async def handle(self, ctx: OpContext, item: WorkItem) -> None:
+        # the unique index on idempotency_key deduped the enqueue; the claim is exclusive by lease
+        summary = await self._order_manager.get_shipment_summary(ctx, item.target_id)
+        await self._topics.publish(Topics.SHIPMENT_UPDATED, summary.to_payload(item.idempotency_key))
 ```
 
-The worker container runs the loop; the impl reads like a domain-service
-impl and leans on the same managers and services a web service would.
+The worker container runs the loop; the handler reads like a
+domain-service impl and leans on the same managers and services a web
+service would.
 
 ``` mermaid
 flowchart LR
     subgraph Source [Source]
         direction TB
-        Topic[topic]
-        Queue[(table-backed queue)]
-        Cron[cron tick]
+        Queue[(work queue)]
+        Wake[wake-up topic]
+        Tick[poll fallback]
     end
 
     subgraph Worker [Worker container - always on]
         direction TB
-        Loop["loop:<br/>pull → dedupe → handle → write → notify"]
+        Loop["loop:<br/>claim → handle → write → complete → notify"]
     end
 
     Mgr[OM managers /<br/>domain services]
     Sto[(Storage)]
-    Notif[Notification topic]
+    Notif[Topic]
 
-    Topic --> Loop
     Queue --> Loop
-    Cron --> Loop
+    Wake --> Loop
+    Tick --> Loop
     Loop -->|call| Mgr
     Mgr --> Sto
-    Loop -->|produce| Notif
+    Loop -->|publish| Notif
 
     style Worker fill:#eef
 ```
 
+A worker runs several items at once, each as its own task, up to a
+capacity it advertises. Each running item renews its lease on a timer.
+A lease that could not be renewed for half its length cancels its own
+task before the lease expires, so two workers never advance the same
+record. The worker heartbeats its own liveness; when heartbeats fail
+repeatedly it stops claiming new work but finishes what it holds.
+
+### Shutdown
+
+On a stop signal the worker drains first and goes offline last: every
+in-flight task is cancelled, each returns its record to the queue with
+a note, then the heartbeat stops, then the worker marks itself
+offline. Read from the outside, the worker is alive until its work is
+safely back in the queue. A rollout never runs more workers than
+desired at once, because a worker holds leases.
+
+### Maintenance Without a Scheduler
+
+Recurring housekeeping (requeue items whose lease expired, expire
+leases, resume records whose park time has passed, roll periods) is a
+sweep that every worker runs on its own timer. The sweep is idempotent
+and serialized by the database, so it needs no leader, no lock, and no
+scheduler component. Resumes are staggered by a small delay so a
+recovered dependency is not met by every parked record at once.
+
 ### Implementation Options
 
-Worker roles run as first-class background services: usually the same
-container shape as web services, minus a public network surface.
-Long-lived coding-agent or execution workers may require a more
-privileged compute environment than ordinary services, including the
-ability to run nested containers, browsers, local test stacks,
-simulators, and hardware-facing tooling. Serverless options like AWS
-Lambda were considered and set aside as the default, because the
-fifteen-minute execution ceiling rules out longer runs, cold starts
-defeat the warm connection pools the rest of the platform relies on, and
-the Lambda runtime does not match how every other component runs on a
-laptop. Kubernetes `Job` and `CronJob` fit narrow one-shot cases but
-make recurring scheduled work harder to observe and evolve. Keeping
-workers as always-on containers makes them indistinguishable from
-services in every way that matters (deployment, observability, pooling,
-local development), and leaves serverless as a case-by-case option for
-truly sporadic workloads.
+Worker roles run as first-class background services: the same
+container shape as web services, minus a public network surface. A
+worker that needs more compute than a web service (a bulk import, a
+report render) is placed on a bigger box; its shape does not change.
+Always-on containers make workers indistinguishable from services in
+every way that matters: deployment, observability, pooling, local
+development.
 
 ## 12. Apps
 
 ### Apps as Products
 
-Apps are products that consume the system. The coding-agent CLI, web
-portal, desktop app, and other user-facing clients are all apps. An app
-sits at the outermost layer. It reaches the platform through the gateway
-and the web services.
+Apps are products that consume the system. The web portal, the CLI,
+the operator console, and other user-facing clients are all apps. An
+app sits at the outermost layer. It reaches the platform through the
+gateway and the web services.
 
 ### Apps Are Dumb
 
 > **Principle:** Apps are intentionally dumb. Only UI, input, and
-> device-specific behavior live in the app. Business logic and
+> browser- or terminal-specific behavior live in the app. Business logic and
 > orchestration belong on the server.
 
 Client apps are intentionally dumb. An app renders UI, reads input, and
-hands requests off to its backing app-specific web service (see section
-10). The app-specific service composes across domain services; the app
-just shows the result.
+hands requests off to its backing service (Section 10). The service
+composes across the domain; the app just shows the result.
 
 The only code that lives inside an app is UI rendering, local input
-handling, and device-specific behavior. Business logic and cross-service
+handling, and browser- or terminal-specific behavior. Business logic and cross-service
 orchestration do not belong in the app.
 
 When a piece of logic is only meaningful for one app, it moves to that
@@ -1518,34 +1933,38 @@ channel. A realtime channel is one persistent, bidirectional connection
 for the session, and reads continuously. Every piece of client-bound
 data flows over it.
 
-One channel carries many message types. Command responses, push
-notifications, subscription updates, and live data changes all travel as
-typed envelopes on the same connection; the client inspects the envelope
+One channel carries many message types. Push notifications,
+subscription updates, and live data changes all travel as typed
+envelopes on the same connection; the client inspects the envelope
 type and routes each message to the right handler. Polling collapses
-into "subscribe once, read forever": instead of `GET /jobs/{id}` on a
-timer, the client sends one subscribe message and receives a push when
-the status changes.
+into "subscribe once, read forever": instead of `GET /orders/{id}` on
+a timer, the client sends one subscribe message and receives a push
+when the status changes.
 
-The rule holds because the marginal cost of another message type on an
-existing channel is effectively zero, while the cost of a second
-transport (a polling endpoint, a separate SSE stream, another WebSocket)
-is a whole new operational surface. Once the first push need earns a
-channel, every subsequent push need rides the same substrate for free.
+The rule holds because another message type on an existing channel
+costs nothing, while a second transport is a whole new operational
+surface. Once the first push need earns a channel, every later push
+need rides the same substrate for free.
 
-A realtime channel makes the app-specific service lightly stateful, and
+A realtime channel makes the backing service lightly stateful, and
 that is accepted deliberately. The only state the service holds is the
-open socket and the queues scoped to it (Section 10, Dealing with
-'Stateful' Services: Inbox and Outbox Queues). Everything else,
-including session data, subscriptions, and accumulated context, is
-recovered on demand from storage, cache, or the presence registry. The
-rules that keep that trade-off bounded are in Section 10 (Stateless vs
-Stateful Services and the stateful-services patterns that follow).
+open socket, its subscriptions, and a bounded buffer (Section 10,
+Realtime at the Edge). Everything else is recovered on demand from
+storage or cache.
 
 One channel per app, not per feature. It is tempting to open a dedicated
-socket for chat, another for notifications, another for live data.
+socket for order events, another for notifications, another for stock
+levels.
 Resist. Every feature piggybacks on the single channel, which keeps
-connection count low, leaves reconnect logic as one thing to get right,
-and keeps the presence registry to one entry per user per connected app.
+connection count low and leaves reconnect logic as one thing to get
+right.
+
+The channel degrades, it does not disappear. The client reconnects
+with exponential backoff; after more than one failed cycle it shows a
+banner and polls at a slow, fixed cadence until the socket is back. The
+client's ping interval and the load balancer's idle timeout are pinned
+in one shared file that both a server test and a client test assert
+against, so the two cannot drift apart in separate pull requests.
 
 > **Principle:** One realtime channel per app, not per feature. Every
 > push rides the same connection as a typed envelope.
@@ -1555,29 +1974,25 @@ flowchart LR
     subgraph ClientApp [Client app]
         direction TB
         Router{typed envelope<br/>router}
-        H1[response handler]
-        H2[notification handler]
-        H3[subscription handler]
-        H4[live-data handler]
+        H1[notification handler]
+        H2[subscription handler]
+        H3[live-data handler]
         Router --> H1
         Router --> H2
         Router --> H3
-        Router --> H4
     end
 
     Channel[Realtime channel<br/>one WebSocket /<br/>gRPC stream]
 
-    subgraph AppSvc [App-specific service]
+    subgraph AppSvc [Backing service]
         direction TB
-        Inbox[(inbox)]
-        Outbox[(outbox)]
+        Outbox[(bounded outbox<br/>per socket)]
     end
 
     Domain[Domain services]
 
-    ClientApp -->|outbound:<br/>commands, subscribes| Channel
+    ClientApp -->|outbound:<br/>subscribes, pings| Channel
     Channel -->|inbound:<br/>typed envelopes| ClientApp
-    Channel --> Inbox
     Outbox --> Channel
     AppSvc -->|composes| Domain
 
@@ -1590,59 +2005,88 @@ flowchart LR
 
 ### Cloud: AWS
 
-Cloud deployments target AWS, for both production and staging. Ordinary
-stateless services and privileged long-running execution workers may use
-different AWS compute substrates; the architecture should not assume
-that every workload fits the same container runtime. Staging mirrors
-production in shape and differs only in capacity, so a service that runs
-correctly in staging is expected to run correctly in production with
-nothing more than scale changes.
+Cloud deployments target AWS. Services and workers run on the same
+container runtime; what differs between environments is scale. Every
+environment has the same module graph, and
+everything that differs between two environments is a variable, so a
+service that runs correctly in the smaller environment is expected to
+run correctly in production with nothing more than scale changes.
+Production does not rebuild: it promotes the images the smaller
+environment already ran, by digest, behind an approval gate.
 
 ### Infrastructure as Code
 
 Every cloud resource is defined in Terraform: networks, services,
 databases, topics, buckets, IAM. Terraform lives in the same monorepo as
 the application code, so an environment change is a pull request and a
-new environment is a fresh parameter set.
+new environment is a fresh parameter set. Formatting and validation of
+every environment are part of CI.
 
 > **Principle:** Every cloud resource is declared in Terraform. No
 > clicks in the console, no untracked state.
 
 ### Local: Docker Compose
 
-Local development and tests run entirely on the developer's machine
-through a single `docker-compose` stack. Every technology piece the
-platform depends on (Postgres, Redis, the object store, the message
-broker) runs as a local container alongside the application services,
-using the same images as the cloud where possible.
+Local development and tests run entirely on the developer's machine.
+Every technology piece the platform depends on (Postgres, the cache,
+the object store, the queue) runs as a local container through a
+single `docker-compose` stack, using the same images as the cloud where
+possible or a wire-compatible stand-in where not. Application processes
+run on the host, started by one script, so a code change is a restart
+and a debugger attaches without ceremony; a second compose file runs
+the application containers too, for the cases that need the real
+images. An optional profile adds developer dashboards (a database
+browser, metrics, traces) that nothing in CI depends on.
 
-The one deliberate exception is for systems that are prohibitively hard
-to replace faithfully. WorkOS for SSO is the canonical case: SAML and
-OIDC flows cannot be stood up as a local container in any meaningful
-way, so local development points at a shared development tenant on the
-real service. The exception list is kept short on purpose.
+> **Principle:** Every dependency runs in a local container. The
+> application runs on the host.
 
-> **Principle:** Every dependency runs in a local container. The only
-> exceptions are SaaS pieces that cannot be faithfully emulated.
+### Twins for External Services
+
+A hosted service the platform depends on (an identity provider, a
+payment processor, a shipping carrier, a tax service) has one
+interface and at least two impls: the real client and a deterministic
+twin that speaks the same wire shapes, signs its own synthetic
+deliveries, and runs in-process or on disk. Tests, the local stack, and
+CI run against the twin; the real client is proven against recorded
+fixtures and, on a separate non-gating workflow, against a sandbox
+account. A twin refuses to run outside a local environment, and every
+record produced through one names its provenance, so a twin's data is
+never mistaken for the real thing.
+
+Twins are a strong suggestion, and the exceptions are named: a service
+that cannot be twinned faithfully gets a shared development tenant on
+the real service, and that list stays short.
+
+### What a Process Refuses
+
+Settings that are only safe locally are refused by the process, not by
+a checklist: a production-named environment on the file secrets
+backend, a twin selected off a loopback origin, a worker registered
+under the wrong tenant. Each refusal is a one-line check at boot that
+exits with a message naming the setting. A boot that succeeds logs one
+line naming every backend it chose.
 
 ## 14. Monorepo Folder Structure
 
 The monorepo root groups code by role: libraries, services, workers,
-apps, clients, deployment, and tooling.
+apps, clients, deployment, and tooling. The tree below is the target
+shape; a system that starts as one API process has one entry under
+`services/` and grows the rest as Section 10 describes.
 
     [root]/
     ├── pyproject.toml                      # uv workspace root
     ├── package.json                        # pnpm workspace root
     ├── pnpm-workspace.yaml
-    ├── ruff.toml                           # shared Python lint config
-    ├── mypy.ini
-    ├── .pre-commit-config.yaml
+    ├── ruff.toml                           # shared Python lint and format config
+    ├── pyrightconfig.json
     ├── .python-version
     ├── .nvmrc
+    ├── Makefile                            # setup, infra-up, migrate, check, test-*, openapi
     ├── README.md
     │
     ├── docs/
-    │   ├── architecture.md
+    │   ├── architecture.md                 # what is implemented, as built
     │   ├── adr/                            # architecture decision records
     │   └── runbooks/
     │
@@ -1651,30 +2095,32 @@ apps, clients, deployment, and tooling.
     │   ├── src/
     │   │   └── platform/
     │   │       └── om/
-    │   │           ├── base.py             # Platform + mixins
-    │   │           ├── opcontext.py
+    │   │           ├── base.py             # Platform + mixins, new_id, utcnow
+    │   │           ├── opcontext.py        # OpContext, AdminContext
     │   │           ├── exceptions.py       # PlatformException root
-    │   │           ├── benches/
+    │   │           ├── root.py             # build_managers
+    │   │           ├── catalog/
+    │   │           │   ├── manager.py
     │   │           │   ├── types/
     │   │           │   ├── impl/
-    │   │           │   ├── utils/
+    │   │           │   ├── rules.py
     │   │           │   └── storage/
     │   │           │       ├── impl/
     │   │           │       └── tables/
-    │   │           ├── hiltesting/
-    │   │           ├── auth/
-    │   │           ├── users/
-    │   │           ├── secrets/
-    │   │           ├── notifications/
-    │   │           └── storage/            # storage root + shared base classes
+    │   │           ├── orders/
+    │   │           ├── inventory/
+    │   │           ├── tenancy/
+    │   │           ├── audit/
+    │   │           └── storage/            # storage root, roles, shared base classes
     │   ├── tests/
     │   │   ├── unit/
     │   │   ├── integration/
     │   │   └── conftest.py
-    │   └── migrations/                     # alembic
+    │   └── migrations/                     # alembic; one chain per database role
     │       ├── alembic.ini
     │       ├── env.py
-    │       └── versions/
+    │       ├── sql/<role>/
+    │       └── versions/<role>/
     │
     ├── infra/                              # platform-infra distribution
     │   ├── pyproject.toml
@@ -1684,36 +2130,37 @@ apps, clients, deployment, and tooling.
     │   │           ├── cache/
     │   │           ├── buckets/
     │   │           ├── topics/
-    │   │           └── impl/
+    │   │           ├── queues/
+    │   │           ├── secrets/
+    │   │           ├── observability.py    # logging, tracing setup
+    │   │           └── impl/               # settings and the configured root
     │   └── tests/
     │
-    ├── domain-services/
-    │   └── bench-api/                      # platform-services-bench
-    │       ├── pyproject.toml
-    │       ├── Dockerfile
-    │       ├── idl/
-    │       │   └── openapi.yaml
-    │       ├── src/
-    │       │   └── platform/
-    │       │       └── services/
-    │       │           └── bench/
-    │       │               ├── impl/
-    │       │               ├── types/
-    │       │               └── _generated/ # gitignored, rebuilt on demand
-    │       ├── tests/
-    │       ├── entrypoints/                # __main__.py for the container
-    │       └── README.md
-    │   # auth-api, hiltesting-api, user-mgmt-api, secret-mgmt-api,
-    │   # doc-api, notification-svc
+    ├── integrations/                       # third-party providers: interface, real client, twin
+    │   ├── pyproject.toml
+    │   ├── src/platform/integrations/
+    │   └── tests/
     │
-    ├── app-services/
-    │   ├── portal-web-svc/                 # same project shape as domain-services
-    │   ├── cli-web-svc/
-    │   └── desktop-web-svc/
+    ├── services/
+    │   ├── api/                            # the one API process; splits into <ns>-api later
+    │   │   ├── pyproject.toml
+    │   │   ├── src/
+    │   │   │   └── platform/
+    │   │   │       └── services/
+    │   │   │           └── api/
+│   │   │               ├── app.py      # create_app: settings, middleware, routers
+    │   │   │               ├── container.py
+    │   │   │               ├── gateway/    # auth, errors, ratelimit, observability
+    │   │   │               ├── routers/    # one module per namespace
+    │   │   │               ├── types/      # one module per namespace: views and requests
+    │   │   │               └── main.py     # serve | migrate | bootstrap | openapi
+    │   │   ├── tests/
+    │   │   └── README.md
+    │   └── portal-web-svc/                 # same project shape
     │
     ├── workers/
-    │   └── test-result-publisher/          # same project shape, no idl/
-    │   # doc-vectorizer, notification-fanout
+    │   ├── shipment-notifier/              # same project shape, no routers or types
+    │   └── catalog-importer/
     │
     ├── apps/
     │   ├── cli/                            # Python CLI
@@ -1722,56 +2169,36 @@ apps, clients, deployment, and tooling.
     │   │   └── tests/
     │   ├── portal/                         # React + TypeScript + Vite
     │   │   ├── package.json                # @platform/portal
-    │   │   ├── tsconfig.json
-    │   │   ├── vite.config.ts
+    │   │   ├── openapi.json                # committed, regenerated by `make openapi`
     │   │   ├── src/
-    │   │   │   ├── extensions/             # feature modules; see Section 15
-    │   │   │   └── ...
+    │   │   │   ├── api/                    # schema.d.ts (generated), types.ts, client.ts
+    │   │   │   ├── realtime/               # provider, envelopes, router
+    │   │   │   ├── queries/                # TanStack Query hooks and key factory
+    │   │   │   └── features/               # one folder per screen
     │   │   └── tests/
-    │   └── desktop/                        # Tauri shell over the same Vite build
-    │       ├── package.json                # @platform/desktop
-    │       ├── src-tauri/
-    │       └── ...
+    │   └── admin/                          # the operator console, same stack
     │
-    ├── clients/                            # one generated package per language per service
-    │   ├── domain-services/
-    │   │   ├── bench-api/
-    │   │   │   ├── python/                 # platform-clients-bench-api
-    │   │   │   └── ts/                     # @platform/bench-api-client
-    │   │   └── ...
-    │   └── app-services/
-    │       ├── portal-web-svc/
-    │       │   ├── python/
-    │       │   └── ts/
-    │       └── ...
+    ├── clients/
+    │   └── python/                         # one typed client package per service
     │
     ├── deployment/
     │   ├── terraform/
     │   │   ├── modules/
     │   │   └── environments/
-    │   │       ├── staging/
+    │   │       ├── dev/
     │   │       └── prod/
     │   ├── local/
-    │   │   ├── docker-compose.yml          # postgres, redis, broker, object store
-    │   │   ├── docker-compose.override.yml
-    │   │   └── seed/
-    │   ├── docker/                         # shared Dockerfile fragments and base images
-    │   └── helm/                           # optional, k8s charts
+    │   │   ├── docker-compose.yml          # postgres, cache, queue, object store
+    │   │   └── docker-compose.full.yml     # plus the application containers
+    │   └── docker/                         # one Dockerfile per image, shared entrypoint
     │
-    ├── scripts/
-    │   ├── gen_rest.py                     # IDL to REST router + types
-    │   ├── gen_grpc.py                     # IDL to .proto + gRPC server wrapper
-    │   ├── gen_clients.py                  # IDL to client packages, both languages
-    │   ├── new_service.py                  # scaffolder
-    │   └── dev.sh                          # bring up the local stack
-    │
-    ├── tools/                              # internal helpers shared by scripts
+    ├── scripts/                            # runnable entry points: dev.sh, connect_*.py
     │
     └── .github/
         └── workflows/
             ├── ci.yml
-            ├── codegen.yml
-            └── deploy.yml
+            ├── deploy.yml
+            └── release.yml
 
 ### Layout Conventions
 
@@ -1779,17 +2206,6 @@ Every Python distribution uses the `src/platform/...` layout. Tests live
 in a `tests/` sibling, not inside the package. The test runner exercises
 the installed package, which surfaces packaging bugs before deploy and
 prevents accidental imports from the source tree during development.
-
-IDL files live in `idl/`, not inside the Python package, because they
-are not Python source. Generated code lands in
-`src/platform/<svc>/_generated/`, with the leading underscore signalling
-"do not hand-edit." Generated code is gitignored and rebuilt as a
-prerequisite of every action that depends on it; the build step is fast
-enough that this is cheaper than committing a noisy diff on every IDL
-change.
-
-> **Principle:** IDL belongs in `idl/`. Generated code belongs in
-> `_generated/`, gitignored, rebuilt on demand.
 
 The OM is one distribution, `platform-om`, covering every namespace.
 Splitting into per-namespace distributions adds packaging overhead
@@ -1801,288 +2217,278 @@ dependencies move together anyway.
 
 Migrations live with the OM at `om/migrations/`. Tables live in
 `platform.om.<ns>.storage.tables`, and the schema timeline is owned by
-the OM, not by any single service. Alembic runs against one tree.
+the OM, not by any single service.
 
-Workers, app-specific services, and domain services share the same
-project shape: `pyproject.toml`, `Dockerfile`, `src/`, `tests/`,
-`entrypoints/`. They differ only in role and in which top-level folder
-they sit under. Workers have no `idl/`; the rest do.
+Workers and services share the same project shape: `pyproject.toml`,
+`src/`, `tests/`, a `main.py` behind a console entry point declared in
+`pyproject.toml`. They differ only in role and in which top-level folder
+they sit under. Workers have no `routers/` or `types/`; services do. A
+service binary is also its own operations CLI: `serve`, `migrate`,
+`bootstrap`, `openapi` are subcommands of the same entry point, so the
+container image and the operator's laptop run the same code paths.
 
-Client packages are generated, one per language per service. Python
-clients are full distributions in `clients/<tier>/<service>/python/`.
-TypeScript clients live in `clients/<tier>/<service>/ts/` as
-`@platform/<service>-client` packages, consumed by apps via the pnpm
-workspace.
-
-`scripts/` and `tools/` are separate on purpose. `scripts/` holds
-runnable entry points (codegen, scaffolders, local dev orchestration).
-`tools/` holds the helper libraries those scripts share.
+Dockerfiles live together under `deployment/docker/`, one per image,
+sharing an entrypoint. An image builds in two stages, installs one
+workspace package with locked dependencies, runs as a non-root user,
+and declares a healthcheck against `/healthz`.
 
 Workspace tooling lives at the repo root. A single `pyproject.toml`
-declares `[tool.uv.workspace]` members; a single `package.json` plus
-`pnpm-workspace.yaml` declares the TypeScript members. Lint, type-check,
-and pre-commit config live next to them, so a developer can run any of
-them from the root and get consistent behavior across every project.
+declares the uv workspace members; a single `package.json` plus
+`pnpm-workspace.yaml` declares the TypeScript members. Lint, format,
+and type-check config live next to them, so a developer runs any of
+them from the root and gets consistent behavior across every project.
+`make check` is the fast local gate (lint, format, types, unit tests)
+and CI runs it plus the integration, migration, image, and
+infrastructure jobs.
+
+> **Python tip:** a top-level package named `platform` shadows the
+> standard-library module of the same name. Pick a product-specific
+> root package name; the layout is what matters, not the word.
 
 ## 15. Client App Architecture
 
 ### Stack
 
 The client stack is React + TypeScript on Vite. The portal builds to a
-static SPA served behind the gateway. The desktop app is the same SPA
-wrapped in Tauri, which uses the OS's native webview and keeps the
-binary small. The CLI is Python and lives outside this stack; the
-write-once rule applies only to the non-CLI apps.
+static SPA served behind the gateway. The operator console is a second
+application on the same stack. The CLI is Python and lives outside this
+stack.
 
-Vite is the toolchain rather than Next.js. Next.js is built around SSR,
-ISR, and SSG, and opting out of all of them still leaves us paying for
-its mental model and its API-routes temptation. API routes in particular
-invite teams to put backend logic in the app, which directly violates
-Section 12's "Apps Are Dumb" rule. Vite is a pure SPA toolchain with no
-opinion on rendering strategy, because none is needed.
+Vite is the toolchain. It builds a static bundle and nothing else,
+which keeps Section 12's "Apps Are Dumb" rule enforced by construction:
+there is no place in the app to put backend logic.
 
-> **Principle:** One React + TypeScript codebase for portal and desktop.
-> The CLI stays Python. Mobile is deferred.
+> **Principle:** One React + TypeScript stack for every browser app.
+> The CLI stays Python.
 
-### No SSR
+### Client Rendering
 
-Rendering happens in the client only. There is no server-side rendering,
-no incremental static regeneration, no edge rendering. The deployed
-artifact is a static bundle that hydrates against backing services and
-the realtime channel.
+Rendering happens in the client only. The deployed artifact is a static
+bundle that hydrates against backing services and the realtime channel.
+The gateway and the realtime channel are the only network surfaces the
+bundle talks to. One runtime, one data-fetching path, and a socket
+that lives for the whole session.
 
-SSR would split "what the app does" across two runtimes, force dual
-data-fetching paths, add operational surface for no return on an
-enterprise B2B app, and break the bidirectional realtime channel
-(sockets do not live on a server-rendered page). The gateway and the
-realtime channel are the only network surfaces the bundle talks to.
-
-> **Principle:** No server-side rendering. The app is a static bundle
-> that talks to backing services and the realtime channel.
-
-### One Codebase, Two Builds
-
-The portal and the desktop app share the same source tree, the same
-routes, the same components, and the same state. The web build is
-`vite build`; the desktop build is `tauri build` over the same Vite
-output. Anything platform-specific (filesystem access, native menus,
-OS-level shortcuts) lives behind a small capability interface, with a
-web impl that no-ops or falls back to web equivalents and a Tauri impl
-that calls into Rust commands.
-
-If mobile becomes a real need, the right call is React Native + React
-Native Web with a shared component layer and explicit discipline about
-which primitives are RN-compatible. Deferring that decision until it is
-real keeps the current stack honest.
+> **Principle:** The app is a static bundle that talks to backing
+> services and the realtime channel.
 
 ### State and Data
 
 State splits along server-state vs client-state. Server state, the
 things the backing services own, lives in TanStack Query: queries,
-mutations, caching, invalidation, optimistic updates, retries. Client
-state, the things only the UI knows about, lives in Zustand: selection,
-modal flags, transient view configuration, anything that does not need
-to be persisted by a service.
+mutations, caching, invalidation, optimistic updates, retries. Query
+keys come from one key factory per domain so invalidation is spelled
+the same way everywhere. Client state, the things only the UI knows
+about, lives in Zustand: selection, modal flags, transient view
+configuration, anything that does not need to be persisted by a
+service. The two together are the entire state stack.
 
-Redux is not used. Zustand replaces it for client state with less
-ceremony, and TanStack Query replaces it for server state with a model
-purpose-built for fetching, not for in-memory event sourcing. The two
-together are the entire state stack.
-
-Realtime envelopes push into both. A status update on the realtime
-channel becomes an invalidation or a direct cache write in TanStack
-Query, so the UI reacts the same way it would to a fresh fetch. A purely
-UI-side push (presence ping, transient notification) becomes a Zustand
-store entry. The envelope router from Section 12 dispatches into these
-handlers, never directly into components.
+Realtime envelopes push into the query cache. A status update on the
+realtime channel becomes an invalidation or a direct cache write in
+TanStack Query, so the UI reacts the same way it would to a fresh
+fetch. A purely
+UI-side push (a transient banner, a connection state)
+becomes a store entry. The envelope router from Section 12 dispatches
+into these handlers, never directly into components.
 
 > **Principle:** Zustand for client state, TanStack Query for server
-> state. No Redux.
+> state. Realtime writes into the query cache.
 
-### Views, View-Models, Stores
+### Views, View-Models, Models
 
-Component code follows a hook-based MVVM split. The Model is generated
-client types (Section 10), Zustand stores, and the TanStack Query cache.
-The View-Model is custom hooks that combine queries, mutations, store
-reads, and local logic into one ergonomic surface per view. The View is
-functional React components that consume those hooks and render JSX,
-with no fetches, mutations, or business decisions inside a component
-file.
+Component code follows a hook-based MVVM split with a third, pure
+layer. The **Model** is a plain TypeScript module per screen: row
+builders, URL codecs, formatting, gating predicates. Pure functions,
+unit-tested, no React. The **View-Model** is a custom hook per screen
+that combines queries, mutations, store reads, and the model into one
+ergonomic surface. The **View** is a functional React component that
+consumes the hook and renders JSX, with no fetches, mutations, or
+business decisions inside a component file.
 
-A view-model hook is the unit of testability. Components stay
-declarative and shallow; tests target hooks where the data shape and
-behavior actually live.
+The model module is the unit of testability; the view-model hook is
+the unit of composition; components stay declarative and shallow.
 
-> **Principle:** Components render. View-model hooks decide. Stores and
-> queries hold.
+> **Principle:** Components render. View-model hooks decide. Model
+> modules compute. Stores and queries hold.
+
+### API Access
+
+Types are generated from the committed OpenAPI document into one file.
+A curated facade module re-exports the names feature code uses, so no
+feature imports a generated path. One small hand-written client owns
+transport: it attaches the bearer and the app header, parses the error
+envelope into a typed error that carries the request id, and clears
+authentication on a 401. Feature code never calls `fetch`.
 
 ### Realtime: One Channel per App
 
-The push-first rule from Section 12 holds without exception. Every push
-the app receives, status updates, chat messages, presence changes,
-notifications, rides the same WebSocket as a typed envelope. A second
-channel for chat would double the connection lifecycle, the reconnect
-logic, the presence-registry entries, and the ordering and backpressure
-reasoning, in exchange for nothing the multiplex cannot already do. If
-chat latency ever becomes a real concern, the fix is a faster broker
-path, not a second socket.
+The push-first rule from Section 12 holds for the portal. One provider
+component owns the socket for the whole app; envelopes are parsed by a
+discriminated union on their `type` and routed into the query cache,
+never into components.
 
-> **Principle:** One realtime channel per app. Chat is an envelope type,
-> not a separate channel.
+> **Principle:** One realtime channel per app. A new kind of push is an
+> envelope type, not a separate channel.
 
-### Feature Modules
+### The Operator Console
 
-Vendor-specific widgets, test-type-specific report tiles, and
-persona-specific dashboard cards are the obvious extension surface for a
-HIL testing product. A full plugin runtime (dynamic loading, module
-federation, third-party distribution) is over-engineering for an
-enterprise app of this shape. A small set of typed, build-time extension
-points is right-sized.
+The operator console is a separate application that shares the
+portal's stack, design tokens, component kit, sign-in flow, and API
+client, and never its security context. It has its own origin, its own
+bundle, and its own routes under `/v1/admin/*`. It holds no realtime
+socket. Its authority comes from the operator allowlist and the
+credential-provenance check of Section 10 (The Gateway), not from a
+tenant role and
+not from a flag in the portal.
 
-The pattern: each extension point is a TypeScript interface
-(`BenchWidget`, `ReportTile`, `DashboardCard`) defined in a shared
-`@platform/extensions-api` package. Each extension is a module under
-`apps/portal/src/extensions/...` that exports an object conforming to
-its interface. A registry collects them at build time by convention (a
-single index file re-exports everything). The shell looks up extensions
-by id or by a match predicate, lazy-loads the module via dynamic import,
-and gates visibility behind a feature flag (Section 16). When a feature
-module is dropped, the registry shrinks and the shell carries on.
-
-This is a plugin contract, not a plugin runtime. It gives us isolation
-between feature modules and a clean place for vendor-specific code
-without the operational weight of true dynamic loading.
-
-> **Principle:** Extension points are typed contracts, registered at
-> build time and lazy-loaded at runtime. No dynamic plugin runtime.
+> **Principle:** The operator console shares the portal's stack and
+> design, never its security context.
 
 ### The CLI Is Different
 
-The CLI is a Python app. Its UI is the terminal, its state lives in the
-process, and its realtime channel is a gRPC stream against `cli-web-svc`
-(Section 10, Wait-for-Response vs Fire-and-Forget). Most of this section
+The CLI is a Python app. Its UI is the terminal and its state lives in
+the process. It talks REST to its backing service with an API key,
+attaches an idempotency key to every creating call, and turns the
+outcome of a followed operation into an exit code. Most of this section
 does not apply to it. What does apply: dumb client, business logic on
-the backend, push-first for long-running operations. Short commands wait
-on correlation ids; long-running operations submit and listen for
-completion envelopes.
+the backend, short commands wait, long-running operations submit and
+follow. It trusts the operating system's certificate store so it works
+behind a corporate proxy the same way the services do.
 
-## 16. Misc
+## 16. Cross-Cutting Conventions
 
-A short set of conventions that apply across the system and did not fit
-cleanly into any single earlier section.
-
-### UUID v4 vs v7
-
-Every id in the system is `uuid_v7`, not `uuid_v4`. Both are 128 bits
-and globally unique in practice, but v7 prefixes its bits with a 48-bit
-millisecond timestamp and fills the rest with randomness. That choice
-earns its keep on every write and every range query.
-
-Inserts into a B-tree index on a v7 id land at the tail of the tree
-because the timestamp prefix orders lexicographically by insertion time.
-Inserts on a v4 id scatter across the index, fragment pages, and
-multiply write IO under load. Every OM entity lives in a relational DB
-with its id as the primary key, so the difference is not hypothetical;
-it shows up on every insert.
-
-A cursor-based list of entities by creation time collapses to a single
-range scan on the id column; v4 would need a compound cursor built from
-`created_at` and id to break ties. Anyone reading a log line can also
-eyeball roughly when the record was created from the id alone, which is
-cheap triage.
-
-> **Principle:** Every id is `uuid_v7`. Time-ordered inserts,
-> time-ordered scans, and time-readable logs fall out of one choice.
+A short set of conventions that apply across the whole system.
 
 ### Exceptions
 
-Every namespace has its own base exception rooted at
-`PlatformException`. The root is a plain `Exception` subclass; each
-namespace defines its own base under it, and concrete exceptions inherit
-from the namespace base:
+Every exception raised inside the platform is rooted at
+`PlatformException`. The root carries the two things a boundary needs
+to present it: a status and a stable machine-readable code. A small
+set of shape exceptions covers almost every case, and a namespace that
+needs its own family multiply-inherits a shape so the status comes
+along:
 
 ``` python
 class PlatformException(Exception):
     """Root of every exception raised inside the platform."""
 
+    http_status: int = 500
+    code: str = "platform_error"
 
-class BenchesException(PlatformException): ...
+class NotFound(PlatformException):
+    http_status = 404
+    code = "not_found"
 
+class Conflict(PlatformException):
+    http_status = 409
+    code = "conflict"
 
-class HiltestingException(PlatformException): ...
+class ValidationFailed(PlatformException):
+    http_status = 422
+    code = "validation_failed"
 
+class NotAuthorized(PlatformException):
+    http_status = 403
+    code = "not_authorized"
 
-class UserManagementException(PlatformException): ...
+class OrdersException(PlatformException): ...
 
-
-class BenchNotFound(BenchesException): ...
-
-
-class BenchAlreadyReserved(BenchesException): ...
+class OrderAlreadyShipped(OrdersException, Conflict): ...
 ```
 
 The shape has two uses. A caller at a boundary (gateway handler, worker
 loop, test harness) catches `PlatformException` and knows the failure is
-domain-originated and not a runtime crash. Translation to HTTP codes or
-gRPC statuses happens at that boundary, not inside managers. Managers
-raise domain exceptions and let the service impl decide how to present
-them.
+domain-originated and not a runtime crash. Translation to an HTTP
+response happens at that boundary, in one handler, using the status
+and code the exception carries. Managers raise domain exceptions and
+never format HTTP.
 
 ### Logs
 
 Logging uses Python's standard `logging` module. It is the platform-wide
-paradigm, not a FastAPI or framework-specific choice; every library in
-our stack (FastAPI, uvicorn, SQLAlchemy, the HTTP client, workers)
+paradigm, not a framework-specific choice; every library in our stack
 either uses it or integrates with it. We do not bring in a competing
 library.
+
+> **Python tip:** a `contextvars.ContextVar` set by the gateway
+> middleware and read by a `logging.Filter` is the whole mechanism.
+> The authoritative request id is still the field on `OpContext`; the
+> context variable exists only so log lines get it for free.
 
 Every module gets its logger with `logging.getLogger(__name__)`, so the
 logger hierarchy mirrors the OM namespace tree. Formatting, level, and
 sink are configured once at the app container's boot and never
 overridden per module. Logs are JSON in cloud environments and
-human-readable locally, switched by an env flag. Fields from `OpContext`
-(org_id, user_id, app type, request id, idempotency key where present)
-are attached through a logging filter installed at the same entry point
-that builds the context, so operations never need to remember to include
-them.
+human-readable locally, switched by an env flag. The request id, and
+any other correlation field the platform chooses, is attached through a
+logging filter that reads a context variable set at the same entry
+point that builds the context, so operations never need to remember to
+include it.
 
 > **Principle:** Python's `logging` is the platform logger. Every module
 > uses it; no module replaces it.
 
-### Event and Metric Telemetry
+### Traces and Metrics
 
-Python does not have a built-in metrics or tracing framework the way it
-has `logging`. The de facto standard is OpenTelemetry (OTel), a CNCF
-project with a stable API, an official Python SDK, and
-auto-instrumentation libraries for every major component in our stack.
+Traces use OpenTelemetry directly. A span is a span whatever backend
+receives it, and swapping backends is an exporter config change. The
+tracer provider is configured at boot only when an endpoint is
+set; otherwise the no-op tracer runs and the code paths stay identical.
 
-We use OpenTelemetry directly, without a Platform wrapper. OTel is
-itself the abstraction: metrics are counters, histograms, and gauges;
-traces are spans; both are independent of the backend we ship data to
-(Prometheus, Grafana, Datadog, Honeycomb, anything speaking OTLP).
-Swapping backends is an exporter config change, not a code change.
-Wrapping OTel in our own interface would re-teach the same concepts
-under different names and buy nothing in return.
+Metrics are counters and histograms exposed on `/metrics` in the
+Prometheus exposition format, again through the client library
+directly. Every request counts once with its route template and
+status; every queue, cache, and rate limit has a counter with an
+outcome label.
 
-> **Principle:** Use OpenTelemetry directly for metrics and traces. The
-> backend is a config detail; the API is stable.
+> **Principle:** OpenTelemetry for traces, a Prometheus endpoint for
+> metrics, both used directly. The backend is a config detail.
 
-### Feature Flags
+### Configuration
 
-There is no standard-library equivalent for feature flags in Python, so
-we adopt a vendor SDK and use it directly. LaunchDarkly is the default
-for commercial hosting; Unleash is the default when we want a
-self-hosted OSS option. Both expose the same shape
-(`client.variation(flag, context, default)`), both publish official
-Python SDKs, and both handle local evaluation with offline fallbacks for
-tests.
+Every process reads its configuration into one settings object at
+boot, from environment variables under one product prefix, with an
+optional `.env` file for local development and a committed
+`.env.example` that documents every knob. Backends are selected here
+and nowhere else: which cache, which topic bus, which secret store,
+which identity provider, real or twin. A manager or a service impl
+receives the resulting handles and options through its constructor
+and never reads an environment variable itself.
 
-We do not wrap the SDK in a `PlatformFeatureFlagsInterface`. Feature
-flags are one of the rare cases where the vendor SDK is itself the seam:
-the client object is injectable, offline mode makes tests trivial, and a
-migration between vendors is find-and-replace on one call site shape.
-Adding a layer on top would hide a familiar API behind a custom one and
-buy no portability we do not already have.
+Runtime variation that belongs to the product (which tenant may do
+what, which plan allows which limit) is a modelled entity with a
+manager and a storage. A feature flag, on the rare day one is needed,
+is a vendor SDK used directly with its client injected at boot.
 
-> **Principle:** Use a feature-flag vendor SDK directly. No Platform
-> wrapper.
+> **Principle:** One settings object per process, read once at boot.
+> Backends are chosen there; nothing below reads the environment.
+
+### The App Container
+
+Every process, service or worker, boots the same way. Settings are
+read. Logging, the trust store, and tracing are configured. Storage is
+built, then infra, then the managers, in that order, and handed to
+whatever runs on top: routers resolve them per request from one
+container object; a worker loop holds them directly. The container has
+`start()` and `close()`, called from the process lifespan, and
+`close()` unwinds in reverse order. A test constructs the same
+container over the in-memory storage root and the local infra root and
+runs the whole application in-process, which is how a service test
+suite runs without a database and swaps every backend for a twin with
+one constructor.
+
+### Records of Decisions
+
+A decision that constrains future work is recorded as an architecture
+decision record under `docs/adr/`: the context, the decision, and the
+consequences, in that order, dated and numbered. Code and comments
+cite the ADR by number, so the reason stays attached to the line.
+`docs/architecture.md` describes the system as built and links to the
+ADRs; this document describes how we build.
+
+The rules in this document that a program can check are checked. A
+unit test asserts that every table has a role and no key crosses one;
+that every storage method takes `org_id` first except the enumerated
+exceptions; that no manager imports a service; that the migration
+chain has one head per role. A rule that is only written down drifts.
+A rule that fails the build holds.
