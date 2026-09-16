@@ -1,11 +1,12 @@
 # Context
 
-Group id: `context`. Covers Section 5 (OpContext, The Operator
-Context), the authorization and tenancy split of Section 6, the
-authorization step and parameter order of Section 7 and its
-"Operations Without a Principal", the tenancy rules of Section 8, the
-tenant keying of Section 9, the credential and operator concerns of the
-gateway in Section 10, and the worker context provenance of Section 11.
+Group id: `context`. Covers OpContext (with The Operator Context),
+the authorization and tenancy split of Separation of Layers, the
+authorization step and parameter order of The Business Layer and its
+"Operations Without a Principal", the tenancy rules of The Storage
+Layer, the tenant keying of Infrastructure, the credential and
+operator concerns of The Gateway in The Network Layer, and the worker
+context provenance of Worker Roles.
 
 This group judges one question: does every operation know who is
 acting, for which tenant, with what authority, and is that knowledge
@@ -21,7 +22,7 @@ takes a context as its first argument, except the enumerated
 principal-less operations (CTX-16). By the time a manager runs, the
 context is fully built.
 
-**Source.** Section 5, OpContext; Section 7, The Business Layer.
+**Source.** OpContext; The Business Layer.
 
 **Look for.** Manager interfaces, service interfaces, worker handlers:
 the first parameter of every async method, and the docstring of any
@@ -44,7 +45,7 @@ id and an optional trace id. The request id reaches every log line,
 every audit row, and the error envelope from the context, never by
 hand.
 
-**Source.** Section 5, OpContext.
+**Source.** OpContext.
 
 **Look for.** The context type definitions, every place that reads
 identity, tenant, or app information, and the audit record type.
@@ -62,7 +63,7 @@ an audit row written without the context's request id.
 tenancy namespace. A credential issued by a principal carries a role no
 higher than the issuer's.
 
-**Source.** Section 5, OpContext.
+**Source.** OpContext.
 
 **Look for.** The role-to-permission table, credential issuing paths
 (API keys, invitations, session tokens), and any code that assigns
@@ -79,7 +80,7 @@ does not cap the new credential's role at the issuer's role.
 **Principle.** Inside a tenant, an entity may be owned by a team, and
 visibility rules consult the context's team membership.
 
-**Source.** Section 5, OpContext.
+**Source.** OpContext.
 
 **Look for.** Entities with a team owner; visibility and listing rules
 in managers; the `in_team` check.
@@ -98,8 +99,8 @@ arrival, by the claim operation a worker calls to take a unit of work,
 and by the bootstrap that seeds an environment. Nothing else constructs
 one.
 
-**Source.** Section 5, OpContext; Section 7, Operations Without a
-Principal; Section 10, The Gateway.
+**Source.** OpContext; The Business Layer, Operations Without a
+Principal; The Network Layer, The Gateway.
 
 **Look for.** Every construction site of the context type and its
 sub-objects.
@@ -118,7 +119,7 @@ call unchanged. A narrower view (an override, a reduced permission set)
 is passed as an explicit argument, never by mutating or copying the
 context mid-request.
 
-**Source.** Section 5, OpContext.
+**Source.** OpContext.
 
 **Look for.** Copies or mutations of the context after the gateway;
 methods that accept a context and hand a different one downstream.
@@ -136,7 +137,7 @@ parameter.
 thread locals, or hidden lookups. Everything ambient flows through the
 context.
 
-**Source.** Section 5, OpContext; Section 16, Logs.
+**Source.** OpContext; Cross-Cutting Conventions, Logs.
 
 **Look for.** Module-level globals holding a current user, tenant, or
 request; thread-local or context-variable reads of identity, tenant,
@@ -157,7 +158,7 @@ Every mutating manager operation starts by requiring the permission it
 needs; visibility rules sit next to the operation they guard.
 Routers translate and storage persists; neither decides authorization.
 
-**Source.** Section 6, Separation of Layers; Section 7, Shape of an
+**Source.** Separation of Layers; The Business Layer, Shape of an
 Operation.
 
 **Look for.** The first lines of manager write methods; permission
@@ -176,8 +177,8 @@ permissions.
 by the tenant, and every write refuses to overwrite a row that belongs
 to another tenant.
 
-**Source.** Section 6, Separation of Layers; Section 8, Principles; A
-Storage Impl.
+**Source.** Separation of Layers; The Storage Layer, Storage Principles;
+A Storage Impl.
 
 **Look for.** Every query in every storage impl, including the
 in-memory one; the shared upsert primitive.
@@ -196,7 +197,8 @@ when the scope is personal to a user, and then peel scope from broad to
 narrow. Manager and service signatures take the context first and
 start at the level below it, since tenant and user are already in it.
 
-**Source.** Section 7, Parameters; Section 8, Namespace Shape.
+**Source.** The Business Layer, Parameters; The Storage Layer, Namespace
+Shape.
 
 **Look for.** Parameter order on storage, manager, and service
 interfaces; user-scoped storages.
@@ -214,7 +216,7 @@ that takes an org id or user id the context already carries.
 interface takes both `org_id` and `user_id`, and both appear in the
 `WHERE` clause of every query in the impl.
 
-**Source.** Section 8, Namespace Shape.
+**Source.** The Storage Layer, Namespace Shape.
 
 **Look for.** Impls behind user-scoped storage interfaces.
 
@@ -231,7 +233,7 @@ exceptions to the tenant-first rule. Global methods take no tenant and
 say why in their docstring; sweeps return the tenant with each row as
 `tuple[UUID, Entity]`; a test enumerates the exceptions.
 
-**Source.** Section 8, Namespace Shape.
+**Source.** The Storage Layer, Namespace Shape.
 
 **Look for.** Storage methods without a tenant parameter; the test that
 lists them.
@@ -249,7 +251,8 @@ no such test at all.
 tenant on cache and bucket calls, so system keys and tenant keys live in
 disjoint namespaces.
 
-**Source.** Section 2, Identifiers; Section 9, Principles.
+**Source.** Naming Entities, Identifiers; Infrastructure, Infrastructure
+Principles.
 
 **Look for.** Cache and bucket calls for platform-owned data.
 
@@ -268,7 +271,7 @@ personal to a user carries the user id inside the key. The bucket impl
 prefixes every storage key with the tenant, so one tenant's blobs cannot
 be read or listed by another.
 
-**Source.** Section 9, Principles; Cache; Buckets.
+**Source.** Infrastructure, Infrastructure Principles; Cache; Buckets.
 
 **Look for.** The cache and bucket interfaces, every call site in
 managers, and the key layout inside the bucket and cache impls.
@@ -285,7 +288,7 @@ keys unprefixed so a list by prefix can cross tenants.
 **Principle.** Every topic payload carries `org_id`, so a consumer can
 filter by tenant before it acts.
 
-**Source.** Section 9, Principles; Topics.
+**Source.** Infrastructure, Infrastructure Principles; Topics.
 
 **Look for.** The payload base class, every payload class, and every
 subscriber handler.
@@ -303,8 +306,8 @@ without comparing the payload's tenant to the connection's tenant.
 token) are declared without a context, documented as platform-internal,
 and produce the context under which the work then runs.
 
-**Source.** Section 7, Operations Without a Principal; Section 11, The
-Work Queue.
+**Source.** The Business Layer, Operations Without a Principal; Worker
+Roles, The Work Queue.
 
 **Look for.** Manager methods without a context parameter; what they
 return; their docstrings.
@@ -323,8 +326,8 @@ enqueuer's principal from the item's `created_by` under a service role.
 Cross-tenant sweeps obtain one service context per live tenant from the
 tenancy manager.
 
-**Source.** Section 11, The Work Queue; Section 7, Operations Without a
-Principal.
+**Source.** Worker Roles, The Work Queue; The Business Layer, Operations
+Without a Principal.
 
 **Look for.** The worker's claim path and how it obtains a context;
 sweep code.
@@ -344,7 +347,7 @@ key is membership-scoped, expiring, and role-capped; a person's login
 credential carries no tenant and is exchanged for a tenant-scoped
 session token.
 
-**Source.** Section 10, The Gateway.
+**Source.** The Network Layer, The Gateway.
 
 **Look for.** Credential formats, the dependencies that parse them,
 which routes accept which kind.
@@ -362,7 +365,7 @@ short-lived ticket minted by an authenticated request, never with a
 long-lived credential in a URL. Redeeming the ticket re-checks the
 credential behind it.
 
-**Source.** Section 10, The Gateway.
+**Source.** The Network Layer, The Gateway.
 
 **Look for.** The socket handshake, the ticket endpoint, ticket
 storage and expiry.
@@ -381,7 +384,8 @@ credential is the person's own sign-in, and produce an `AdminContext`
 that has no tenant. Operator managers take `AdminContext` and nothing
 else; tenant managers take `OpContext` and nothing else.
 
-**Source.** Section 5, The Operator Context; Section 10, The Gateway.
+**Source.** OpContext, The Operator Context; The Network Layer, The
+Gateway.
 
 **Look for.** The operator gate, the `AdminContext` type, every manager
 signature on the operator plane and the tenant plane.

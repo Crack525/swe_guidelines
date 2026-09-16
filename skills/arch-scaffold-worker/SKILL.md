@@ -7,11 +7,12 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash(make check), Bash(make test-u
 # arch-scaffold-worker
 
 Conventions: `${CLAUDE_SKILL_DIR}/../_shared/scaffold-conventions.md`.
-Sections of `${CLAUDE_SKILL_DIR}/../../architecture.md`: 7 (Operations
-Without a Principal), 8 (Database Roles), 9 (Topics, Idempotency), 10
-(Long-Running Orchestrations), 11 (The Work Queue, Shape of a Worker,
-Shutdown, Maintenance Without a Scheduler, Implementation Options), 16
-(The App Container).
+Sections of `${CLAUDE_SKILL_DIR}/../../architecture.md`: The Business
+Layer (Operations Without a Principal), The Storage Layer (Database
+Roles), Infrastructure (Topics, Idempotency), The Network Layer
+(Long-Running Orchestrations), Worker Roles (The Work Queue, Shape of a
+Worker, Shutdown, Maintenance Without a Scheduler, Implementation
+Options), Cross-Cutting Conventions (The App Container).
 
 ## Input
 

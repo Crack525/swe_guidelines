@@ -7,13 +7,15 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash(make setup), Bash(make check)
 # arch-scaffold-new
 
 Conventions: `${CLAUDE_SKILL_DIR}/../_shared/scaffold-conventions.md`.
-Sections of `${CLAUDE_SKILL_DIR}/../../architecture.md`: 2 (Naming
-Entities), 5 (OpContext, The Operator Context), 8 (Storage Root,
-Defining ORM Classes, Translation, Database Roles, Migrations), 9
-(InfraInterface Root), 10 (Auth: the Gateway Verifies, the Tenancy
-Domain Owns), 13 (Local: Docker Compose, What a Process Refuses), 14
-(Monorepo Folder Structure, Layout Conventions), 16 (Exceptions,
-Configuration, Records of Decisions).
+Sections of `${CLAUDE_SKILL_DIR}/../../architecture.md`: Naming
+Entities, OpContext (The Operator Context), The Storage Layer (Storage
+Root, Defining ORM Classes, Translation, Database Roles, Migrations),
+Infrastructure (InfraInterface Root), The Network Layer (Auth: the
+Gateway Verifies, the Tenancy Domain Owns), Deployment (Local: Docker
+Compose, What a Process Refuses), Monorepo Folder Structure (Layout
+Conventions), Cross-Cutting Conventions (Exceptions, Configuration,
+Records of Decisions), Technology Choices and How to Override Them
+(Overriding a Choice).
 
 ## Input
 
@@ -43,6 +45,7 @@ Skeleton:
 | `README.md`                                       | how to set up, run, and check                                                             |
 | `docs/architecture.md`                            | a one-page "as built" stub linking to the guideline                                       |
 | `docs/adr/0001-root-package.md`                   | the root package decision                                                                 |
+| `docs/adr/0002-technology-choices.md`             | the stack as adopted: every technology the guideline names, and per substitution the substitute, the reason, and the rules it must still satisfy |
 | `docs/runbooks/README.md`                         | where runbooks go                                                                         |
 | `.github/workflows/ci.yml`                        | runs `make check`, then the integration job over the compose stack                        |
 | `deployment/local/docker-compose.yml`             | Postgres, a cache, a queue, an object store                                                |

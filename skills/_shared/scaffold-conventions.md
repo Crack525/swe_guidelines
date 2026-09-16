@@ -12,7 +12,8 @@ flags stated in prose, what to ask when something is missing),
 `## Created` (a table, columns `File` and `Holds`), `## Changed` (a
 table, columns `File` and `Change`), `## Procedure` (numbered, only the
 steps that differ from this file), `## Output` (one line pointing here).
-Sections are cited as `N (Subsection, Subsection)` in ascending order.
+Sections are cited by title, as `Title (Subsection, Subsection)`, in
+the order the guideline presents them, never by number.
 
 ## Before writing anything
 
@@ -55,7 +56,8 @@ Sections are cited as `N (Subsection, Subsection)` in ascending order.
   `utcnow()`.
 - Every manager and service operation takes `ctx: OpContext` first;
   every storage call takes `org_id: UUID` first. The exceptions are the
-  ones Sections 7 and 8 name (principal-less operations that produce a
+  ones The Business Layer and The Storage Layer name (principal-less
+  operations that produce a
   context, global tables, cross-tenant sweeps), each documented in its
   docstring and listed in the repository's exceptions test.
 - Every interface is a plain class with `...` method bodies; every impl

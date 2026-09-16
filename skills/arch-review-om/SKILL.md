@@ -1,6 +1,6 @@
 ---
 name: arch-review-om
-description: "Review code or a change through the Object Model lenses of the Software Design and Architecture Guidelines. Covers Sections 1 to 3: source of truth, mixins, immutability, identifiers, namespaces, pure rules. Use for a change that touches this area, or as one leg of arch-review-full."
+description: "Review code or a change through the Object Model lenses of the Software Design and Architecture Guidelines. Covers The Domain as the Source of Truth, Naming Entities, Namespaces as Swimlanes: source of truth, mixins, immutability, identifiers, namespaces, pure rules. Use for a change that touches this area, or as one leg of arch-review-full."
 allowed-tools: Read, Grep, Glob, Bash(git diff:*), Bash(git log:*), Bash(git status:*), Bash(git rev-parse:*), Bash(git merge-base:*), Bash(git symbolic-ref:*)
 ---
 

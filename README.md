@@ -6,15 +6,17 @@ of review lenses derived from the guideline and a set of Claude Code
 skills that review code through those lenses or scaffold new pieces in
 the prescribed shape.
 
-- **[`architecture.md`](architecture.md)**: the guideline. Sixteen
-  sections, from the object model at the center to deployment at the
-  edge. Read it once end to end; it is written to be read that way.
-- **[`lenses/`](lenses/README.md)**: 137 lenses in seven groups. Each
+- **[`architecture.md`](architecture.md)**: the guideline, from the
+  object model at the center to deployment at the edge, with a table
+  of contents and named anchor links between sections. Read it once
+  end to end; it is written to be read that way. It names its
+  technologies on purpose and says how a project substitutes its own.
+- **[`lenses/`](lenses/README.md)**: 138 lenses in seven groups. Each
   restates one rule as something a reviewer can check against code and
-  cites the section it comes from.
+  cites the section it comes from, by title.
 - **[`skills/`](skills/)**: Claude Code skills. Seven group reviews, one
   full review that runs them in parallel, six scaffolds, an explainer,
-  and a deviation recorder.
+  a deviation recorder, and one skill that grows the guideline itself.
 
 ## Install the skills
 
@@ -55,6 +57,7 @@ in its own `specs/` folder are in [`docs/adopting.md`](docs/adopting.md).
 | `arch-scaffold-app`       | A browser app, an operator console, or a CLI                                 |
 | `arch-explain`            | Answers a question about the architecture with citations                     |
 | `arch-deviate`            | Records a deliberate deviation as an ADR in the consuming project            |
+| `arch-new-aspect`         | Incorporates a new aspect into the guideline and cascades it through lenses, skills, and docs (runs in a checkout of this repository) |
 
 Every review skill takes the same argument (empty for the current
 branch, a path, a git range, or `all`). The seven group skills produce
@@ -67,8 +70,9 @@ Claude Code 2.1 and later.
 ## Develop
 
 ```bash
-make check        # markdownlint, lens format and citations, vocabulary leaks, links, skill shape
+make check        # markdownlint, lens format and citations, vocabulary leaks, links, table of contents, skill shape
 make gen-skills   # regenerate the seven group review skills from the template
+make gen-toc      # regenerate the table of contents of architecture.md
 ```
 
 Requirements: Python 3.12 or newer, Node 22 or newer. `make lint`

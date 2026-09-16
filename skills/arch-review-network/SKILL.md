@@ -1,6 +1,6 @@
 ---
 name: arch-review-network
-description: "Review code or a change through the Network lenses of the Software Design and Architecture Guidelines. Covers Sections 10 and 12: topology, gateway, public types, clients, realtime, push-first. Use for a change that touches this area, or as one leg of arch-review-full."
+description: "Review code or a change through the Network lenses of the Software Design and Architecture Guidelines. Covers The Network Layer and Apps (Push-First Apps): topology, gateway, public types, clients, realtime, push-first. Use for a change that touches this area, or as one leg of arch-review-full."
 allowed-tools: Read, Grep, Glob, Bash(git diff:*), Bash(git log:*), Bash(git status:*), Bash(git rev-parse:*), Bash(git merge-base:*), Bash(git symbolic-ref:*)
 ---
 

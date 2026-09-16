@@ -7,11 +7,12 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash(make check), Bash(make test-u
 # arch-scaffold-service
 
 Conventions: `${CLAUDE_SKILL_DIR}/../_shared/scaffold-conventions.md`.
-Sections of `${CLAUDE_SKILL_DIR}/../../architecture.md`: 10 (How It
-Starts and Where It Goes, Domain Services vs App-Specific Services,
-Service Interfaces and Impls, The Gateway, Public Types, Realtime at
-the Edge), 14 (Layout Conventions), 16 (Exceptions, Configuration, The
-App Container).
+Sections of `${CLAUDE_SKILL_DIR}/../../architecture.md`: The Network
+Layer (How It Starts and Where It Goes, Domain Services vs App-Specific
+Services, Service Interfaces and Impls, The Gateway, Public Types,
+Realtime at the Edge), Monorepo Folder Structure (Layout Conventions),
+Cross-Cutting Conventions (Exceptions, Configuration, The App
+Container).
 
 ## Input
 

@@ -22,13 +22,14 @@ say the installation is incomplete.
   rules apply to `om/orders/impl/manager.py`");
 - a description of a change ("I want to add a nightly cleanup").
 
-Empty arguments mean: give the guided tour, Sections 1 to 16 in order,
-two sentences each, then the seven lens groups in one line each.
+Empty arguments mean: give the guided tour, every section in the order
+of the guideline's Contents, two sentences each, then the seven lens
+groups in one line each.
 
 ## Procedure
 
-1. Read the guideline's table of sections (the `## N.` headings) and
-   the lens group table in `lenses/README.md`.
+1. Read the guideline's Contents (the table of contents under its
+   first heading) and the lens group table in `lenses/README.md`.
 2. Find the sections and subsections that govern the question. Read
    them in full; quote the `Principle` callouts verbatim when they
    answer the question directly.
@@ -45,6 +46,6 @@ two sentences each, then the seven lens groups in one line each.
 
 ## Output
 
-Short, in prose, in the guideline's voice. Cite as `Section N,
-Subsection` and `LENS-ID`. Do not restate the guideline at length;
+Short, in prose, in the guideline's voice. Cite sections by title, as
+`Section title, Subsection`, never by number, and lenses as `LENS-ID`. Do not restate the guideline at length;
 quote the sentence that decides, then stop.

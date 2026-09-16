@@ -1,7 +1,7 @@
 # Network
 
-Group id: `network`. Covers Section 10 (The Network Layer) and Section
-12 (Push-First Apps) of `architecture.md`.
+Group id: `network`. Covers The Network Layer and Push-First Apps (in
+Apps) of `architecture.md`.
 
 This group judges how the system faces its callers: how services are
 cut, what the gateway does once at the edge, what crosses the wire, and
@@ -19,7 +19,7 @@ module and one wire-types module per OM namespace behind one gateway;
 growth into separate services is mechanical because the namespace
 boundary is a module boundary from day one.
 
-**Source.** Section 10, How It Starts and Where It Goes.
+**Source.** The Network Layer, How It Starts and Where It Goes.
 
 **Look for.** The layout of `routers/` and `types/` in the API process:
 whether each namespace has exactly one router module and one types
@@ -40,7 +40,7 @@ namespace, running with the whole OM in-process; a service-to-service
 call is rare and reserved for a workflow that exceeds one manager's
 scope.
 
-**Source.** Section 10, Web Services as Scalability Units.
+**Source.** The Network Layer, Web Services as Scalability Units.
 
 **Look for.** Which `platform.om.<ns>` packages each domain service's
 routers import; whether a service composes managers locally; the
@@ -62,7 +62,7 @@ app, stays thin, and holds only logic meaningful to that app, with the
 app type explicit on the context. External API users call domain
 services directly; an app talks to its own backing service.
 
-**Source.** Section 10, Domain Services vs App-Specific Services.
+**Source.** The Network Layer, Domain Services vs App-Specific Services.
 
 **Look for.** Which callers each service accepts; where per-app
 aggregation and session shaping live; whether app-aware branches read
@@ -85,7 +85,7 @@ decided from anything other than the context's app type.
 anything in its memory must be rebuildable from storage, cache, or
 queues, so a replica can be killed and replaced at any time.
 
-**Source.** Section 10, Stateless vs Stateful Services.
+**Source.** The Network Layer, Stateless vs Stateful Services.
 
 **Look for.** A module-level or instance-level `dict`, `list`, or `set`
 in a domain service that one request mutates and a later request
@@ -104,8 +104,8 @@ information; a warm cache that is the only copy of a computed result.
 memory the open socket, the subscriptions the client registered, and a
 bounded buffer of frames waiting to be written, and nothing else.
 
-**Source.** Section 10, Stateless vs Stateful Services; Realtime at
-the Edge.
+**Source.** The Network Layer, Stateless vs Stateful Services; Realtime
+at the Edge.
 
 **Look for.** The per-connection state kept by the socket handler;
 whether session data, preferences, or accumulated context live next to
@@ -125,7 +125,7 @@ inbound `x-request-id` or mints one, stamps it on the context, echoes
 it in the response header, and attaches it to the log context and the
 trace span.
 
-**Source.** Section 10, The Gateway.
+**Source.** The Network Layer, The Gateway.
 
 **Look for.** Where bearer tokens and headers are parsed; whether any
 router, service impl, or manager reads `Authorization` or an app
@@ -147,7 +147,7 @@ id.
 exception carries, one catch-all turns anything else into a 500 in the
 same shape, and routers never set error status codes.
 
-**Source.** Section 10, The Gateway (Error envelope).
+**Source.** The Network Layer, The Gateway (Error envelope).
 
 **Look for.** The registered exception handlers; `try`/`except` blocks
 in routers that map exceptions to responses; ad hoc error bodies;
@@ -168,7 +168,7 @@ credential id, the client address for unauthenticated routes, or a
 digest of the path token for inbound webhooks; a rejection is 429 with
 `Retry-After` and the error envelope; limits fail open.
 
-**Source.** Section 10, The Gateway (Rate limits).
+**Source.** The Network Layer, The Gateway (Rate limits).
 
 **Look for.** How limits are declared per route; which key identifies
 the subject; what happens when the cache is unreachable; the response
@@ -187,7 +187,7 @@ cache is down; a rate limit relied on as a security boundary.
 the first response is stored per tenant under the key and replayed on
 a retry, using the same storage primitive the queue handlers use.
 
-**Source.** Section 10, The Gateway (Edge idempotency).
+**Source.** The Network Layer, The Gateway (Edge idempotency).
 
 **Look for.** Creating endpoints and whether they read the header;
 where the stored response is keyed; whether the key is scoped to the
@@ -207,7 +207,7 @@ primitive.
 and histograms, and the API prefix is applied once where routers are
 mounted.
 
-**Source.** Section 10, The Gateway (Health, Versioning).
+**Source.** The Network Layer, The Gateway (Health, Versioning).
 
 **Look for.** The three operational endpoints and what each does;
 whether liveness touches a dependency; where the version prefix is
@@ -227,8 +227,8 @@ manager for the principal behind them; organizations, identities,
 users, memberships, teams, credentials, sessions, and invitations are
 a regular namespace with types, a manager, and storage.
 
-**Source.** Section 10, Auth: the Gateway Verifies, the Tenancy Domain
-Owns.
+**Source.** The Network Layer, Auth: the Gateway Verifies, the Tenancy
+Domain Owns.
 
 **Look for.** Where signup, invitation, role management, key rotation,
 and session refresh are implemented; whether the gateway holds its own
@@ -247,7 +247,7 @@ without TLS; managed backends that require TLS get it as a connection
 string; outbound TLS verification uses the operating system's trust
 store in every process.
 
-**Source.** Section 10, Intra-Service Communication.
+**Source.** The Network Layer, Intra-Service Communication.
 
 **Look for.** Certificate handling in service impls; how HTTP clients
 are constructed; whether a bundled certificate store is used instead
@@ -267,7 +267,7 @@ fields; names end in `View`, `Request`, or `Issued...View`; lists
 return a bare list with a clamped limit and streams page by
 `after_seq`; the OM never changes to match the wire.
 
-**Source.** Section 10, Public Types.
+**Source.** The Network Layer, Public Types.
 
 **Look for.** The `types/` modules and their base classes; whether
 entities are returned directly from routers; naming of request and
@@ -286,7 +286,7 @@ clamped limit; offset paging on an append-only stream.
 committed, and CI regenerates it and fails on a diff, so a change to
 the API surface shows in the document in the same pull request.
 
-**Source.** Section 10, From OM to Wire.
+**Source.** The Network Layer, From OM to Wire.
 
 **Look for.** The committed document and the make target that
 regenerates it; the CI job that compares; whether the document is
@@ -305,7 +305,7 @@ language has one client for it, in one place, built from the committed
 OpenAPI document: one generated type set for a TypeScript app and one
 typed client package for Python consumers.
 
-**Source.** Section 10, Clients Live in One Place.
+**Source.** The Network Layer, Clients Live in One Place.
 
 **Look for.** How many places in a language construct calls to a
 service; whether a consumer built its own client instead of importing
@@ -326,7 +326,7 @@ filters by tenant and by the client's subscriptions. A routing store
 mapping user to instance replaces the broadcast only when the replica
 count grows past what broadcast affords.
 
-**Source.** Section 10, Realtime at the Edge.
+**Source.** The Network Layer, Realtime at the Edge.
 
 **Look for.** How a push reaches the process with the right socket;
 whether producers look anything up before publishing; the filtering in
@@ -346,7 +346,7 @@ a task; when it is full the oldest frame is dropped and logged; every
 push is also a record, and a reconnecting client asks for everything
 after the last sequence it saw.
 
-**Source.** Section 10, Realtime at the Edge.
+**Source.** The Network Layer, Realtime at the Edge.
 
 **Look for.** The outbox capacity and overflow behavior; whether every
 pushed event has a durable record; the reconnect path and its
@@ -364,7 +364,7 @@ missed events after a reconnect.
 envelope, the rate limit, and the idempotency key; the socket carries
 only subscription management and keepalives inbound.
 
-**Source.** Section 10, Realtime at the Edge.
+**Source.** The Network Layer, Realtime at the Edge.
 
 **Look for.** The set of inbound message types the socket handler
 accepts; whether any mutation is performed from a socket frame.
@@ -382,7 +382,7 @@ operation at the client; a long operation returns an acknowledgement
 with an id and completes with a push, and the server produces
 responses and notifications the same way in both cases.
 
-**Source.** Section 10, Wait-for-Response vs Fire-and-Forget.
+**Source.** The Network Layer, Wait-for-Response vs Fire-and-Forget.
 
 **Look for.** Endpoints that start long work and what they return;
 whether a request blocks for minutes; how a CLI follows an operation
@@ -402,7 +402,7 @@ owns it for the whole app; every push rides it as a typed envelope
 parsed by a discriminated union on `type`, and a new kind of push is a
 new envelope type, not a new connection.
 
-**Source.** Section 12, Push-First Apps.
+**Source.** Apps, Push-First Apps.
 
 **Look for.** The number of sockets or streams an app opens and which
 component owns them; how envelopes are discriminated; whether a
@@ -424,7 +424,7 @@ the socket returns; the ping interval and the load balancer idle
 timeout live in one shared file that both a server test and a client
 test assert against.
 
-**Source.** Section 12, Push-First Apps.
+**Source.** Apps, Push-First Apps.
 
 **Look for.** The reconnect logic and its backoff; the fallback
 behavior when the socket stays down; where keepalive and idle timeout

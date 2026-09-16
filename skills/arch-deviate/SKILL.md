@@ -15,8 +15,13 @@ documented exception when the ADR is cited next to the code.
 ## Input
 
 `$ARGUMENTS` names the rule being deviated from, as a lens id
-(`STO-02`), a section (`Section 8, Principles`), or a sentence
-describing it, optionally followed by a one-line reason. Ask in one
+(`STO-02`), a section by title (`The Storage Layer, Storage
+Principles`), or a sentence describing it, optionally followed by a
+one-line reason. A technology substitution (an equivalent in place of
+a technology the guideline names) is not a deviation and is recorded
+in the project's technology-choices ADR instead, as the guideline's
+"Technology Choices and How to Override Them" section states; when
+`$ARGUMENTS` describes one, say so and stop. Ask in one
 message for what is missing: the reason, the scope of the deviation
 (which namespace, service, or table), and whether it is permanent or
 has a condition for ending.

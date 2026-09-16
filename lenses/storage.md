@@ -1,7 +1,7 @@
 # Storage
 
-Group id: `storage`. Covers Section 8 (The Storage Layer) and the
-index-related rules of Section 2 (Identifiers) of `architecture.md`.
+Group id: `storage`. Covers The Storage Layer and the index-related
+rules of Identifiers (in Naming Entities) of `architecture.md`.
 
 This group judges how the storage layer persists and returns entities:
 what a storage operation may do, how tables are declared, how rows and
@@ -19,7 +19,7 @@ optimization, but no manager assumes a cascade, a rejected orphan, or a
 join the schema happens to permit. Relationships the business layer
 needs are plain id columns it reads and writes itself.
 
-**Source.** Section 8, Principles.
+**Source.** The Storage Layer, Storage Principles.
 
 **Look for.** Delete paths in managers and storage impls: the code
 deletes or detaches every dependent record itself rather than stopping
@@ -41,7 +41,7 @@ self-contained unit that the impl commits itself; nothing spans two
 storage calls. Each operation opens its own short session and commits
 it; there is no session that outlives the call.
 
-**Source.** Section 8, Principles; A Storage Impl.
+**Source.** The Storage Layer, Storage Principles; A Storage Impl.
 
 **Look for.** Session or connection objects opened in one storage
 method and used in another, passed through a manager, held on `self`,
@@ -65,7 +65,7 @@ claim, a ledger in a system that moves money), it is a single named
 interface method, so the interface stays technology-free and the
 exception is visible by name.
 
-**Source.** Section 8, Principles; A Storage Impl.
+**Source.** The Storage Layer, Storage Principles; A Storage Impl.
 
 **Look for.** Storage interface methods that claim, settle, or mutate
 under a lock: each is one method whose name says what it does
@@ -86,7 +86,7 @@ or a transaction handle.
 **Principle.** Joins are avoided but allowed as an implementation
 detail. They never leak into the interface.
 
-**Source.** Section 8, Principles.
+**Source.** The Storage Layer, Storage Principles.
 
 **Look for.** Storage interface return types: entities, read models,
 and tuples of ids and entities, never row tuples or join projections
@@ -105,7 +105,7 @@ a `JOIN` result or a table alias. A join spans two database roles.
 functions in the DB. If something happens, it happens in our code.
 Every query is written explicitly in its storage class.
 
-**Source.** Section 8, Principles.
+**Source.** The Storage Layer, Storage Principles.
 
 **Look for.** Migration SQL containing `CREATE TRIGGER`, `CREATE
 FUNCTION`, `CREATE PROCEDURE`, `CREATE RULE`, or generated columns that
@@ -125,7 +125,8 @@ manager's copy. A query calls a user-defined function.
 in the DB and read its ID afterwards. IDs originate above storage, with
 `new_id()`.
 
-**Source.** Section 8, Principles; Section 2, Identifiers.
+**Source.** The Storage Layer, Storage Principles; Naming Entities,
+Identifiers.
 
 **Look for.** Primary key columns declared with a database default, a
 sequence, an identity, or `gen_random_uuid()`. Storage write methods
@@ -146,7 +147,7 @@ defaults are optional, kept as a convenience for admin and test
 operations where an operator writes plain SQL by hand. A default added
 to backfill a new column is removed once the backfill is done.
 
-**Source.** Section 8, Principles.
+**Source.** The Storage Layer, Storage Principles.
 
 **Look for.** A field whose default exists only on the table column
 and not on the entity class. A `server_default` introduced by an `ADD
@@ -164,7 +165,7 @@ a column that every write now sets.
 relational DB to a columnar DB on a different technology changes only
 `impl/`, never the interfaces or the entities.
 
-**Source.** Section 8, Principles; Namespace Shape.
+**Source.** The Storage Layer, Storage Principles; Namespace Shape.
 
 **Look for.** Interface signatures for technology types: sessions,
 engines, connections, ORM row classes, query builders, driver
@@ -186,7 +187,7 @@ of the object model, scoped under its parent entity namespace: the
 interface in `storage/__init__.py`, impls under `storage/impl/`, and
 ORM classes under `storage/tables/`, not exposed.
 
-**Source.** Section 8, Namespace Shape.
+**Source.** The Storage Layer, Namespace Shape.
 
 **Look for.** Each OM namespace with persistence has `storage/`
 containing `__init__.py` (the interface), `impl/` (one module per
@@ -209,7 +210,7 @@ every namespace impl and wires cross-storage dependencies between them.
 Cross-storage dependencies are injected through the constructor; the
 interface is untouched.
 
-**Source.** Section 8, Storage Root; Cross-Storage Dependencies.
+**Source.** The Storage Layer, Storage Root; Cross-Storage Dependencies.
 
 **Look for.** `StorageInterface` with `get_<entity>_storage()` per
 storage, `healthcheck()`, and `close()`. Higher layers receiving a
@@ -236,7 +237,7 @@ in the shared `tables/` package, with one storage-only addition:
 classes compose the mixins their entity has, in the same house-style
 order as the OM.
 
-**Source.** Section 8, Defining ORM Classes.
+**Source.** The Storage Layer, Defining ORM Classes.
 
 **Look for.** Table classes composing `IdentifiableMixin` (or
 `GlobalIdentifiableMixin` for a global table), `NamedMixin`,
@@ -262,7 +263,7 @@ track writes. This is the one deliberate exception to the OM
 immutability rule, and it is bounded: rows never leave the storage
 impl.
 
-**Source.** Section 8, Defining ORM Classes.
+**Source.** The Storage Layer, Defining ORM Classes.
 
 **Look for.** Return statements in storage impls: every one returns an
 entity, a read model, or a plain value, never a row. Row objects passed
@@ -283,7 +284,7 @@ composes, in house-style order, and its own columns follow. A new
 column is declared at the end of its class so the physical table and
 the class stay in step when the column is appended.
 
-**Source.** Section 8, Defining ORM Classes.
+**Source.** The Storage Layer, Defining ORM Classes.
 
 **Look for.** Mixin columns carrying the negative `sort_order` bands
 that pin the header block to the front. A table class edited in the
@@ -305,7 +306,8 @@ single-column index of its own. Index what the SQL filters on, not what
 Python filters afterwards; reach for a compound index when a real query
 asks for one.
 
-**Source.** Section 8, Defining ORM Classes; Section 2, Identifiers.
+**Source.** The Storage Layer, Defining ORM Classes; Naming Entities,
+Identifiers.
 
 **Look for.** Feed tables (events, audit, streams, lists ordered by
 creation) carrying `Index(org_id, id)` and queries ordering by `id`.
@@ -330,7 +332,7 @@ all. Custom translation is written only when the row and the entity
 diverge, and module-level helpers are preferred over an inheritance
 base.
 
-**Source.** Section 8, Translation.
+**Source.** The Storage Layer, Translation.
 
 **Look for.** Storage impls calling the shared helpers for reads,
 inserts, and in-place updates. Hand-written field-by-field mapping in
@@ -352,7 +354,7 @@ applying the entity onto the existing row.
 namespace uses: an upsert that reads the existing row by id, applies
 the entity onto it or inserts a new one, and commits.
 
-**Source.** Section 8, A Storage Impl.
+**Source.** The Storage Layer, A Storage Impl.
 
 **Look for.** Write methods that are one call to the shared upsert.
 Hand-rolled insert-or-update logic repeated across impls.
@@ -374,7 +376,7 @@ is the manager's concern. A database-backed topic bus connects to the
 queue role. Analytics never runs in the request path of any role; it
 reads a mirror.
 
-**Source.** Section 8, Database Roles.
+**Source.** The Storage Layer, Database Roles.
 
 **Look for.** The table-to-role map: every table present, `schema`
 derived from it rather than declared on the class. Statements that name
@@ -406,7 +408,7 @@ role's table, and refuses to migrate one role when the caller meant
 all of them. A metadata-vs-schema check for every role is in the fast
 test gate; a downgrade-then-upgrade is in CI.
 
-**Source.** Section 8, Migrations.
+**Source.** The Storage Layer, Migrations.
 
 **Look for.** `om/migrations/sql/<role>/YYYYMMDDHHMM_<slug>.up.sql`
 and `.down.sql` pairs, with a wrapper under `versions/<role>/` that

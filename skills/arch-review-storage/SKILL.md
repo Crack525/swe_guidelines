@@ -1,6 +1,6 @@
 ---
 name: arch-review-storage
-description: "Review code or a change through the Storage lenses of the Software Design and Architecture Guidelines. Covers Section 8 and Identifiers: storage principles, tables, translation, roles, migrations. Use for a change that touches this area, or as one leg of arch-review-full."
+description: "Review code or a change through the Storage lenses of the Software Design and Architecture Guidelines. Covers The Storage Layer and Identifiers: storage principles, tables, translation, roles, migrations. Use for a change that touches this area, or as one leg of arch-review-full."
 allowed-tools: Read, Grep, Glob, Bash(git diff:*), Bash(git log:*), Bash(git status:*), Bash(git rev-parse:*), Bash(git merge-base:*), Bash(git symbolic-ref:*)
 ---
 

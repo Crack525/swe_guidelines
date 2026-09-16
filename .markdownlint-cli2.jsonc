@@ -7,9 +7,9 @@
     // The guideline uses pandoc-style list indentation ("-   item").
     "MD007": false,
     "MD030": false,
-    // Tree diagrams are indented blocks; everything else is fenced.
-    "MD046": false,
-    // "### Principles" appears once per major section on purpose.
+    // Every code block, tree diagrams included, is fenced.
+    "MD046": { "style": "fenced" },
+    // Subsection titles may repeat under different sections.
     "MD024": { "siblings_only": true },
     // Mermaid nodes use <br/> for line breaks.
     "MD033": { "allowed_elements": ["br"] },

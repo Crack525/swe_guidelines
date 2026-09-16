@@ -1,8 +1,8 @@
 # Async
 
-Group id: `async`. Covers Section 9 (Infrastructure), Section 10
+Group id: `async`. Covers Infrastructure, The Network Layer
 (Idempotency on the Consumer Side, Long-Running Orchestrations), and
-Section 11 (Worker Roles) of `architecture.md`.
+Worker Roles of `architecture.md`.
 
 This group judges everything that happens off the request path: the
 infrastructure capabilities managers lean on, how work is handed off
@@ -20,7 +20,7 @@ swappable impls, and a handle to one arrives only through a
 constructor at boot, never through a global, a thread local, a
 module-level client, or `OpContext`.
 
-**Source.** Section 9, Principles.
+**Source.** Infrastructure, Infrastructure Principles.
 
 **Look for.** Any module-level cache, bucket, topic, queue, or secret
 client; any attribute on the context that hands out an infra handle;
@@ -39,7 +39,7 @@ getter per capability and `start()` / `close()`. The app container
 chooses the impl behind each getter from settings, opens the root at
 boot, and closes it at shutdown.
 
-**Source.** Section 9, InfraInterface Root.
+**Source.** Infrastructure, InfraInterface Root.
 
 **Look for.** The infra root class and its getters; the container's
 start and close order; where each impl is selected.
@@ -58,7 +58,7 @@ object.
 the container logs the chosen backends once at start, so a boot log
 names exactly what the process is talking to.
 
-**Source.** Section 9, Principles.
+**Source.** Infrastructure, Infrastructure Principles.
 
 **Look for.** A `describe()` on each impl; the one-line inventory the
 container logs after `start()`.
@@ -75,7 +75,7 @@ process is on the local or the cloud backend.
 unrelated consumers do not step on each other's keys, and a manager
 receives its cache already scoped at wire-up time.
 
-**Source.** Section 9, Cache.
+**Source.** Infrastructure, Cache.
 
 **Look for.** The `CacheScope` enum; manager constructors taking
 `CacheInterface`; the wire-up site that calls `get_cache(scope)`.
@@ -93,7 +93,7 @@ its key, and a write bumps that number with one atomic `increment`, so
 every older entry is orphaned at once. The TTL is a backstop, never the
 primary invalidation.
 
-**Source.** Section 9, Cache.
+**Source.** Infrastructure, Cache.
 
 **Look for.** How a manager builds cache keys; what a write path does
 to the cache; use of `increment` versus `invalidate` on a write.
@@ -111,7 +111,7 @@ for anything other than rate limits and generations.
 that cannot be reached is a miss, not an error. Nothing that must be
 correct is kept only in a cache.
 
-**Source.** Section 9, Cache.
+**Source.** Infrastructure, Cache.
 
 **Look for.** Error handling in the cache impls and at cache call
 sites; any value that exists only in the cache.
@@ -128,7 +128,7 @@ only copy is a cache entry.
 storage impl talks to its database and nothing else. Caching decisions
 live in managers, where the cost of a stale read is understood.
 
-**Source.** Section 9, Cache.
+**Source.** Infrastructure, Cache.
 
 **Look for.** Storage impl constructors and read methods; where cache
 calls appear.
@@ -147,7 +147,7 @@ and download so the service never proxies a large transfer through its
 own memory. A local filesystem impl with the same layout serves
 development and tests.
 
-**Source.** Section 9, Buckets.
+**Source.** Infrastructure, Buckets.
 
 **Look for.** The `Buckets` enum; the bucket interface; how uploads
 and downloads reach clients; the local impl.
@@ -167,7 +167,7 @@ by a payload map, and every payload extends `TopicPayload` with a
 producer-set `idempotency_key` and `produced_at`. `publish` returns
 `None`; `subscribe` returns an unsubscribe callable.
 
-**Source.** Section 9, Topics.
+**Source.** Infrastructure, Topics.
 
 **Look for.** The `Topics` enum, `TOPIC_PAYLOADS`, the payload base
 class, the signatures of `publish` and `subscribe`.
@@ -189,7 +189,7 @@ When the bus is backed by the database, it connects to the queue role,
 because the processes that enqueue work and the workers they wake must
 share it.
 
-**Source.** Section 9, Topics; Section 8, Database Roles.
+**Source.** Infrastructure, Topics; The Storage Layer, Database Roles.
 
 **Look for.** What each topic handler does with a message; whether any
 handler is the only path by which some work gets done; which database
@@ -209,7 +209,7 @@ that would not fit, marks it `truncated`, and the consumer re-reads the
 record from storage. Consumers written that way work unchanged on a
 bus with no cap.
 
-**Source.** Section 9, Topics.
+**Source.** Infrastructure, Topics.
 
 **Look for.** The database-backed topic impl; consumers of topics that
 carry large payloads.
@@ -228,7 +228,7 @@ queue delivers at least once and does not deduplicate; the consumer
 dedupes. Dead letters are visible: an audit entry names them and a
 metric counts them.
 
-**Source.** Section 9, Queues.
+**Source.** Infrastructure, Queues.
 
 **Look for.** The queue interface and its impls; the consumer's dedupe
 step; what happens after the last failed attempt.
@@ -251,7 +251,7 @@ and the store it was looked up in, never a value. A process that names
 itself staging or production and finds the file backend configured
 refuses to start.
 
-**Source.** Section 9, Secrets.
+**Source.** Infrastructure, Secrets.
 
 **Look for.** Entity fields that hold credentials; where `get(name)` is
 called and how long the value lives; log and audit calls near secret
@@ -275,7 +275,7 @@ delivery id), the handler dedupes before doing work through a unique
 index or an upsert keyed on it, and every pipeline stage forwards the
 key.
 
-**Source.** Section 10, Idempotency on the Consumer Side.
+**Source.** The Network Layer, Idempotency on the Consumer Side.
 
 **Look for.** The dedupe step at the top of each handler; the unique
 index or upsert on the key; the key on every message the handler
@@ -299,7 +299,7 @@ thing that is not a job is a topic subscriber that only forwards
 events to sockets its own process holds; anything that writes,
 retries, or outlives a connection is a worker.
 
-**Source.** Section 11, Workers, Not Web-Service Side Jobs;
+**Source.** Worker Roles, Workers, Not Web-Service Side Jobs;
 Implementation Options.
 
 **Look for.** Background tasks created inside a service process;
@@ -324,7 +324,7 @@ available row in the named queue and stamps claim and lease together.
 Completion marks done, requeues with a growing delay, or fails when
 attempts run out; handing an item back costs no attempt.
 
-**Source.** Section 11, The Work Queue.
+**Source.** Worker Roles, The Work Queue.
 
 **Look for.** The work item type; the enqueue, claim, complete, defer,
 and requeue methods; the order of write and publish in enqueue.
@@ -344,7 +344,7 @@ a timer, and a lease that could not be renewed for half its length
 cancels its own task before the lease expires. Repeated heartbeat
 failures stop claiming but let held work finish.
 
-**Source.** Section 11, Shape of a Worker.
+**Source.** Worker Roles, Shape of a Worker.
 
 **Look for.** The claim loop and its capacity check; the per-item lease
 renewal task; what happens when renewal fails; the heartbeat failure
@@ -364,7 +364,7 @@ returns its record to the queue with a note, then the heartbeat stops,
 then the worker marks itself offline. A rollout never runs more workers
 than desired at once, because a worker holds leases.
 
-**Source.** Section 11, Shutdown.
+**Source.** Worker Roles, Shutdown.
 
 **Look for.** The signal handler and its order of operations; the
 deployment's rollout limits for worker roles.
@@ -383,7 +383,7 @@ its own timer, idempotent and serialized by the database, with no
 leader, no lock, and no scheduler component. Resumes are staggered so a
 recovered dependency is not met by every parked record at once.
 
-**Source.** Section 11, Maintenance Without a Scheduler.
+**Source.** Worker Roles, Maintenance Without a Scheduler.
 
 **Look for.** Where housekeeping runs; any leader election, cron
 component, or scheduled task; how parked records are resumed.
@@ -402,7 +402,7 @@ a status and a cursor, claimed and advanced by stateless workers, so
 another worker picks up at the persisted position when one dies. The
 claim is a separate row from the record it advances.
 
-**Source.** Section 10, Long-Running Orchestrations.
+**Source.** The Network Layer, Long-Running Orchestrations.
 
 **Look for.** How long operations are modelled; what is persisted
 between steps; whether the claim lives on the record or on a work item.
@@ -422,7 +422,7 @@ an input a person must supply parks the record; only a real limit
 terminates it. A parked record is woken by the event that clears its
 reason, by the sweep at its resume time, or by a person.
 
-**Source.** Section 10, Long-Running Orchestrations.
+**Source.** The Network Layer, Long-Running Orchestrations.
 
 **Look for.** The status values of long-running records; what the code
 does on a transient outage, a raised limit, or a missing input; the

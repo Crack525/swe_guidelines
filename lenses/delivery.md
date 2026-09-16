@@ -1,8 +1,10 @@
 # Delivery
 
-Group id: `delivery`. Covers Sections 12 (Apps as Products, Apps Are
-Dumb), 13, 14, 15 (except the realtime channel rule), and 16 (except
-The App Container) of `architecture.md`.
+Group id: `delivery`. Covers Apps (Apps as Products, Apps Are Dumb),
+Deployment, Monorepo Folder Structure, Client App Architecture (except
+the realtime channel rule), Cross-Cutting Conventions (except The App
+Container), and Technology Choices and How to Override Them of
+`architecture.md`.
 
 This group judges how the system reaches people and machines: the
 apps at the edge, the repository they are built from, the environments
@@ -20,7 +22,7 @@ moves into that app's app-specific service; logic meaningful to more
 than one app moves into a domain service or the OM. Business logic and
 cross-service orchestration never live in the app.
 
-**Source.** Section 12, Apps Are Dumb.
+**Source.** Apps, Apps Are Dumb.
 
 **Look for.** App source under `apps/`: component files, hooks, and
 CLI command bodies that compute a business outcome, validate a domain
@@ -46,7 +48,7 @@ nothing more than scale changes. Production does not rebuild: it
 promotes the images the smaller environment already ran, by digest,
 behind an approval gate.
 
-**Source.** Section 13, Cloud: AWS.
+**Source.** Deployment, Cloud: AWS.
 
 **Look for.** `deployment/terraform/environments/*`: the set of modules
 each environment instantiates and the variables it passes; resources
@@ -69,7 +71,7 @@ are all defined in Terraform that lives in the same monorepo. An
 environment change is a pull request. Formatting and validation of
 every environment run in CI.
 
-**Source.** Section 13, Infrastructure as Code.
+**Source.** Deployment, Infrastructure as Code.
 
 **Look for.** `deployment/terraform/` coverage of every resource the
 application names in its settings; the CI workflow's Terraform
@@ -91,7 +93,7 @@ script; a second compose file runs the application containers when the
 real images are needed. Developer dashboards are an optional profile
 nothing in CI depends on.
 
-**Source.** Section 13, Local: Docker Compose.
+**Source.** Deployment, Local: Docker Compose.
 
 **Look for.** `deployment/local/docker-compose.yml` and its full
 variant; the start script; the profile that holds dashboards; CI jobs
@@ -116,7 +118,7 @@ its provenance. This is a strong suggestion; a service that cannot be
 twinned faithfully gets a shared development tenant, and that list
 stays short.
 
-**Source.** Section 13, Twins for External Services.
+**Source.** Deployment, Twins for External Services.
 
 **Look for.** `integrations/` and provider selection in settings: one
 interface per external service, the impls behind it, provenance fields
@@ -137,7 +139,7 @@ refused by the process at boot with a message naming the setting, not
 by a deployment checklist. A boot that succeeds logs one line naming
 every backend it chose.
 
-**Source.** Section 13, What a Process Refuses.
+**Source.** Deployment, What a Process Refuses.
 
 **Look for.** Boot code and settings validation: checks pairing the
 environment name with the secrets backend, twin selection with the
@@ -161,7 +163,7 @@ The OM is a single distribution covering every namespace; namespaces
 are folders inside it, and migrations live with the OM, which owns the
 schema timeline.
 
-**Source.** Section 14, Monorepo Folder Structure; Layout Conventions.
+**Source.** Monorepo Folder Structure; Layout Conventions.
 
 **Look for.** The top-level tree and where a new package was placed; a
 service or worker outside its role folder; domain code outside `om/`;
@@ -182,7 +184,7 @@ layout, and tests live in a `tests/` sibling, so the test runner
 exercises the installed package. The root package is named for the
 product; the layout is what matters, not the word.
 
-**Source.** Section 14, Layout Conventions.
+**Source.** Monorepo Folder Structure, Layout Conventions.
 
 **Look for.** Each distribution's `pyproject.toml`, `src/` and
 `tests/` directories; test imports that resolve to the source tree
@@ -204,7 +206,7 @@ package names.
 `routers/` or `types/`; services do. A service binary is also its own
 operations CLI (`serve`, `migrate`, `bootstrap`, `openapi`).
 
-**Source.** Section 14, Layout Conventions.
+**Source.** Monorepo Folder Structure, Layout Conventions.
 
 **Look for.** The layout of each entry under `services/` and
 `workers/`; the `[project.scripts]` entry point; the subcommands its
@@ -224,7 +226,7 @@ one per image, sharing an entrypoint. An image builds in two stages,
 installs one workspace package with locked dependencies, runs as a
 non-root user, and declares a healthcheck against `/healthz`.
 
-**Source.** Section 14, Layout Conventions.
+**Source.** Monorepo Folder Structure, Layout Conventions.
 
 **Look for.** One Dockerfile per image under `deployment/docker/`:
 stages, the install command and lock file, the `USER` instruction, the
@@ -244,7 +246,7 @@ members. Lint, format, and type-check config live at the root.
 `make check` runs lint, format, types, and unit tests; CI runs it plus
 the integration, migration, image, and infrastructure jobs.
 
-**Source.** Section 14, Layout Conventions.
+**Source.** Monorepo Folder Structure, Layout Conventions.
 
 **Look for.** Root config files and the `check` target; per-package
 lint or type configs that diverge from the root; CI jobs beyond the
@@ -264,7 +266,7 @@ only network surfaces are the gateway and the realtime channel. The
 operator console is a second application on the same stack. The CLI is
 Python.
 
-**Source.** Section 15, Stack; Client Rendering.
+**Source.** Client App Architecture, Stack; Client Rendering.
 
 **Look for.** `apps/*/package.json` and build config; a browser app
 introduced on a different framework or toolchain; the build output and
@@ -285,7 +287,7 @@ a CLI rewritten outside Python.
 factory per domain. Client state lives in Zustand. Realtime envelopes
 write into the query cache, never directly into components.
 
-**Source.** Section 15, State and Data.
+**Source.** Client App Architecture, State and Data.
 
 **Look for.** `src/queries/` and the key factory; store modules;
 realtime handlers and what they write to; server data held in stores
@@ -306,7 +308,7 @@ combines queries, mutations, stores, and the model, and a View that
 renders. Components contain no fetches, mutations, or business
 decisions. The model module is the unit of testability.
 
-**Source.** Section 15, Views, View-Models, Models.
+**Source.** Client App Architecture, Views, View-Models, Models.
 
 **Look for.** Per-screen folders under `src/features/`: the presence
 of a model module with tests, a view-model hook, and components that
@@ -326,7 +328,7 @@ hand-written client owns transport: bearer and app header, error
 envelope parsed into a typed error with the request id, sign-out on
 401. Feature code never calls `fetch`.
 
-**Source.** Section 15, API Access.
+**Source.** Client App Architecture, API Access.
 
 **Look for.** `src/api/`: the generated file, the facade, the client;
 imports of the generated path from feature code; direct `fetch` calls.
@@ -342,10 +344,10 @@ that duplicate generated ones; `fetch` outside the client.
 **Principle.** The operator console is a separate application sharing
 the portal's stack, design tokens, component kit, sign-in flow, and API
 client. It has its own origin, bundle, and routes under `/v1/admin/*`,
-holds no realtime socket, and derives its authority as Section 10
+holds no realtime socket, and derives its authority as The Gateway
 states, not from a tenant role or a portal flag.
 
-**Source.** Section 15, The Operator Console.
+**Source.** Client App Architecture, The Operator Console.
 
 **Look for.** `apps/admin/`: its origin configuration, route prefix,
 and absence of a socket provider; operator screens inside the portal.
@@ -363,7 +365,7 @@ idempotency key to every creating call, turns the outcome of a
 followed operation into an exit code, and trusts the operating
 system's certificate store.
 
-**Source.** Section 15, The CLI Is Different.
+**Source.** Client App Architecture, The CLI Is Different.
 
 **Look for.** The CLI's HTTP client setup, creating commands and their
 headers, the follow loop and its exit code, TLS configuration.
@@ -383,7 +385,7 @@ Shape exceptions (`NotFound`, `Conflict`, `ValidationFailed`,
 a shape. Translation to HTTP happens once, at the boundary. Managers
 never format HTTP.
 
-**Source.** Section 16, Exceptions.
+**Source.** Cross-Cutting Conventions, Exceptions.
 
 **Look for.** `om/exceptions.py`; exception classes defined elsewhere;
 `raise` sites in managers; the boundary handler; status codes set in
@@ -403,7 +405,7 @@ Formatting, level, and sink are configured once at boot, JSON in cloud
 and readable locally. Correlation fields reach every line through a
 filter reading a context variable set where the context is built.
 
-**Source.** Section 16, Logs.
+**Source.** Cross-Cutting Conventions, Logs.
 
 **Look for.** Logging setup in the boot path; per-module logger
 creation; any second logging library; how the request id reaches log
@@ -425,7 +427,8 @@ template and status, and every queue, cache, and rate limit has a
 counter with an outcome label. Observability is the one capability
 used through its vendor API rather than a platform interface.
 
-**Source.** Section 16, Traces and Metrics; Section 9, Principles.
+**Source.** Cross-Cutting Conventions, Traces and Metrics;
+Infrastructure, Infrastructure Principles.
 
 **Look for.** Tracing and metrics setup; a platform module that
 re-exposes spans, counters, or histograms under its own names; code
@@ -448,7 +451,7 @@ optional `.env` and a committed `.env.example` documenting every knob.
 Backends are selected there and nowhere else. Managers and service
 impls receive handles and options through constructors.
 
-**Source.** Section 16, Configuration.
+**Source.** Cross-Cutting Conventions, Configuration.
 
 **Look for.** The settings class and its prefix; `.env.example`
 coverage; `os.environ` or `getenv` reads outside the settings and boot
@@ -467,7 +470,7 @@ tenant may do, what a plan allows) is a modelled entity with a manager
 and storage. A feature flag, when needed, is a vendor SDK used
 directly with its client injected at boot.
 
-**Source.** Section 16, Configuration.
+**Source.** Cross-Cutting Conventions, Configuration.
 
 **Look for.** Where per-tenant or per-plan behavior is decided; flag
 checks in managers; a home-grown flag abstraction.
@@ -485,7 +488,7 @@ client constructed inside a manager.
 numbered. Code and comments cite the ADR by number.
 `docs/architecture.md` describes the system as built.
 
-**Source.** Section 16, Records of Decisions.
+**Source.** Cross-Cutting Conventions, Records of Decisions.
 
 **Look for.** A diff that adds to an enumerated-exceptions list,
 removes or skips a conformance test, or adds a lint or type suppression
@@ -506,7 +509,7 @@ except the enumerated exceptions, no manager imports a service, the
 migration chain has one head per role. A rule that fails the build
 holds.
 
-**Source.** Section 16, Records of Decisions.
+**Source.** Cross-Cutting Conventions, Records of Decisions.
 
 **Look for.** Conformance tests in the unit suite; a new rule or
 exception introduced without a test that asserts it; a rule stated in
@@ -515,5 +518,31 @@ docs that a test could enforce and does not.
 **Violation.** A new storage exception not added to the enumerated
 list a test checks; an import-direction rule with no test; a role map
 whose completeness nothing asserts.
+
+**Severity.** medium
+
+## DEL-25 Technology substitutions are recorded, shapes are kept
+
+**Principle.** The technologies the guideline names are defaults. A
+project that substitutes an equivalent keeps every rule that does not
+name the technology and records each substitution in one ADR under
+`docs/adr/`: the choice as named, the substitute, the reason, and the
+rules the substitute must still satisfy. A substitution that changes a
+shape is a deviation and is recorded as one, rule by rule.
+
+**Source.** Technology Choices and How to Override Them, Overriding a
+Choice.
+
+**Look for.** Dependencies and providers that differ from the named
+stack (`pyproject.toml`, `package.json`, compose images, Terraform
+providers, the ORM and migration tool); whether `docs/adr/` holds a
+record naming each substitution; whether the project's pointer to the
+guideline links it; whether the substitute still satisfies the rules
+the record lists (queue claim, atomic increment, at-least-once bus).
+
+**Violation.** A substitute technology in the tree with no ADR naming
+it; an ADR that swaps a technology and silently drops a rule it cannot
+satisfy; a substitution recorded as a deviation or a deviation recorded
+as a substitution.
 
 **Severity.** medium

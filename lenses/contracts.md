@@ -1,9 +1,9 @@
 # Contracts
 
-Group id: `contracts`. Covers Section 4 (Interfaces), Section 6
-(Separation of Layers), Section 7 (The Business Layer), Section 10
-(Service Interfaces and Impls; Direction of Calls), and Section 16 (The
-App Container) of `architecture.md`.
+Group id: `contracts`. Covers Interfaces, Separation of Layers, The
+Business Layer, The Network Layer (Service Interfaces and Impls;
+Direction of Calls), and Cross-Cutting Conventions (The App Container)
+of `architecture.md`.
 
 This group judges how the pieces of the system are declared, wired, and
 allowed to call each other: interfaces and their impls, constructor
@@ -22,7 +22,7 @@ channel to `network`, and settings objects and environment reads to
 `*Interface` that lists the operations its scope supports. An operation
 is an async method whose signature is a contract.
 
-**Source.** Section 4, Interfaces.
+**Source.** Interfaces.
 
 **Look for.** Every manager, storage, and service class; the module a
 consumer imports from; the type of every dependency a constructor
@@ -42,7 +42,7 @@ bodies, and an impl subclasses it. That is enough for the type checker
 to hold every impl to the signature, and it keeps the interface readable
 as documentation.
 
-**Source.** Section 4, Interfaces.
+**Source.** Interfaces.
 
 **Look for.** Interface declarations; the base list of every impl
 class; method bodies inside interface classes.
@@ -61,7 +61,7 @@ and an in-memory impl, and they are interchangeable at wiring time.
 Names put the technology last: `WarehouseStoragePostgresImpl`,
 `WarehouseStorageMemoryImpl`.
 
-**Source.** Section 4, Multiple impls per interface.
+**Source.** Interfaces, Multiple impls per interface.
 
 **Look for.** Impl class names under `impl/` folders; the set of impls
 behind each storage and infra interface; the names that appear in
@@ -79,7 +79,7 @@ interface or a caller.
 stub: every read, write, filter, and tenancy rule the relational impl
 has, the memory impl has too, and the test suite runs both.
 
-**Source.** Section 4, Multiple impls per interface.
+**Source.** Interfaces, Multiple impls per interface.
 
 **Look for.** The memory impl of every storage interface; the test
 fixtures that select an impl; parametrized tests that run against both.
@@ -99,7 +99,7 @@ selectively. Decoration is an infrastructure pattern; a manager that
 needs a cache takes one through its constructor rather than wrapping
 its storage.
 
-**Source.** Section 4, Composition by decoration.
+**Source.** Interfaces, Composition by decoration.
 
 **Look for.** Wrapper classes for caching, retry, metrics, and tracing;
 how a manager obtains caching.
@@ -118,7 +118,7 @@ constructor and typed by interface, never by impl. A dependency on a
 peer manager or a peer storage is an implementation detail of the impl
 that holds it; the interface never gains a parameter for it.
 
-**Source.** Section 4, Injectability; Section 7, Cross-Manager
+**Source.** Interfaces, Injectability; The Business Layer, Cross-Manager
 Dependencies.
 
 **Look for.** Constructor signatures of every impl; type annotations of
@@ -139,7 +139,7 @@ a peer manager or storage as an argument.
 length, a threshold) takes a small frozen options object in its
 constructor, built once at boot from settings.
 
-**Source.** Section 4, Injectability.
+**Source.** Interfaces, Injectability.
 
 **Look for.** Constructor parameters that carry numbers, durations, or
 limits; module-level constants inside impls that differ between
@@ -159,7 +159,7 @@ namespace, or pass a narrow callable for the one operation the upper
 manager needs. Reaching into another impl's private attributes after
 construction is not wiring.
 
-**Source.** Section 4, Injectability.
+**Source.** Interfaces, Injectability.
 
 **Look for.** The business root's wiring code; assignments to another
 object's underscore-prefixed attributes; constructor parameters with a
@@ -178,7 +178,7 @@ order and wires them together. The storage, infra, and services roots
 expose one getter per member; the business root returns one frozen
 object with a field per manager.
 
-**Source.** Section 7, The Business Layer; Section 4, Injectability.
+**Source.** The Business Layer; Interfaces, Injectability.
 
 **Look for.** The root modules of storage, infra, business, and
 services; where impls are instantiated; whether the returned object is
@@ -195,7 +195,7 @@ mutable container or a dict; wiring is spread across request handlers.
 **Principle.** Three layers: Network, Business, Storage. Upper layers
 depend on interfaces exposed by lower layers, never on their internals.
 
-**Source.** Section 6, Separation of Layers.
+**Source.** Separation of Layers.
 
 **Look for.** Import graph across the network, business, and storage
 packages; what a router imports from a storage package; what a manager
@@ -209,11 +209,11 @@ reads a session or connection object from a storage impl.
 
 ## CON-11 Infrastructure never leaks a technology across a boundary
 
-**Principle.** Infrastructure capabilities (Section 9) are injected into
+**Principle.** Infrastructure capabilities are injected into
 any of the three layers and never leak a technology choice across a
 boundary.
 
-**Source.** Section 6, Separation of Layers.
+**Source.** Separation of Layers.
 
 **Look for.** Interface signatures that mention a client library, a
 driver, or a vendor type; return types of infra getters; exceptions
@@ -231,7 +231,7 @@ branches on which backend is configured.
 managers and storage; storage calls storage. Nothing reaches up.
 `services.*` exists only in the network layer.
 
-**Source.** Section 10, Direction of Calls.
+**Source.** The Network Layer, Direction of Calls.
 
 **Look for.** Imports of `services` from any OM or storage module;
 imports of managers from any storage module; callbacks that let a lower
@@ -250,7 +250,7 @@ but not other app-specific services. If two apps need the same logic,
 it belongs in a domain service or in the OM. A domain service cannot
 call an app-specific service.
 
-**Source.** Section 10, Direction of Calls.
+**Source.** The Network Layer, Direction of Calls.
 
 **Look for.** Constructor dependencies of app-specific service impls;
 any domain service that imports from an app-specific package.
@@ -268,7 +268,7 @@ not in the OM. The service impl holds both a service-level dependency
 and a manager-level dependency, and the manager receives the result of
 the other service as a plain argument.
 
-**Source.** Section 10, Direction of Calls.
+**Source.** The Network Layer, Direction of Calls.
 
 **Look for.** Service impl methods that call more than one namespace;
 the parameter list of the manager method such a service impl calls;
@@ -291,7 +291,7 @@ router starts deciding something, the decision moves into a manager. A
 service impl may sequence calls across services and managers; it does
 not hold business rules either.
 
-**Source.** Section 10, Service Interfaces and Impls.
+**Source.** The Network Layer, Service Interfaces and Impls.
 
 **Look for.** Router function bodies: any `if`, `for`, or arithmetic
 other than building request arguments and the view; direct storage
@@ -312,7 +312,7 @@ order. The container has `start()` and `close()`, and `close()` unwinds
 in reverse. A test constructs the same container over the in-memory
 storage root and the local infra root.
 
-**Source.** Section 16, The App Container.
+**Source.** Cross-Cutting Conventions, The App Container.
 
 **Look for.** The container module of each service and worker; the order
 of construction; the lifespan hooks; the test fixture that builds the
@@ -335,7 +335,7 @@ sets `updated_at` on every update and `deleted_at` / `deleted_by` on a
 soft delete, always by copy. Mutating methods return the entity that
 was written.
 
-**Source.** Section 7, Shape of an Operation.
+**Source.** The Business Layer, Shape of an Operation.
 
 **Look for.** Manager `create_*`, `update_*`, and `delete_*` bodies: the
 read that confirms existence and tenancy before an update, the

@@ -7,10 +7,10 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash(make check), Bash(make test-u
 # arch-scaffold-namespace
 
 Conventions: `${CLAUDE_SKILL_DIR}/../_shared/scaffold-conventions.md`.
-Sections of `${CLAUDE_SKILL_DIR}/../../architecture.md`: 3 (Namespaces
-as Swimlanes), 4 (Interfaces, Injectability), 7 (Cross-Manager
-Dependencies), 8 (Namespace Shape, Storage Root, Cross-Storage
-Dependencies).
+Sections of `${CLAUDE_SKILL_DIR}/../../architecture.md`: Namespaces as
+Swimlanes, Interfaces (Injectability), The Business Layer
+(Cross-Manager Dependencies), The Storage Layer (Namespace Shape,
+Storage Root, Cross-Storage Dependencies).
 
 ## Input
 

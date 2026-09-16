@@ -7,10 +7,10 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash(make check), Bash(make test-u
 # arch-scaffold-entity
 
 Conventions: `${CLAUDE_SKILL_DIR}/../_shared/scaffold-conventions.md`.
-Sections of `${CLAUDE_SKILL_DIR}/../../architecture.md`: 2 (Naming
-Entities, Identifiers), 7 (Shape of an Operation), 8 (Namespace Shape,
-Defining ORM Classes, A Storage Impl, Database Roles, Migrations), 10
-(Public Types).
+Sections of `${CLAUDE_SKILL_DIR}/../../architecture.md`: Naming
+Entities (Identifiers), The Business Layer (Shape of an Operation), The
+Storage Layer (Namespace Shape, Defining ORM Classes, A Storage Impl,
+Database Roles, Migrations), The Network Layer (Public Types).
 
 ## Input
 

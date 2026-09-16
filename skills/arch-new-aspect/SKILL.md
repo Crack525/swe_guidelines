@@ -1,0 +1,115 @@
+---
+name: arch-new-aspect
+description: "Incorporate a new aspect (a rule, a clarification, a rationale, or a pointer) into the Software Design and Architecture Guidelines and every file derived from it: decide whether it is a section, a subsection, a paragraph, or a mention; place it; add or sharpen the lenses it implies; and cascade it through the skills, the docs, the README, and the changelog so the repository stays consistent. Runs inside a checkout of the guideline repository, including a fork that carries its own aspects."
+allowed-tools: Read, Grep, Glob, Write, Edit, Bash(make check), Bash(make gen-skills), Bash(make gen-toc), Bash(make lenses), Bash(make leaks), Bash(make links), Bash(make toc), Bash(git log:*), Bash(git status:*), Bash(git diff:*)
+---
+
+# arch-new-aspect
+
+A guideline grows one aspect at a time, and each aspect lands in more
+than one file: the guideline states it, a lens makes it checkable, a
+skill applies it, the docs and the changelog record it. This skill
+takes a brief description of an aspect and does the whole landing, in
+the guideline's voice, so the person supplies the idea and reviews the
+result rather than chasing the cascade by hand.
+
+## Where it runs
+
+The current working directory must be a checkout of the guideline
+repository: `architecture.md`, `lenses/README.md`, `AGENTS.md`, and
+`scripts/check_lenses.py` all present. Otherwise stop and say so. The
+copy under `${CLAUDE_SKILL_DIR}/../..` is the installed plugin, not
+the checkout being changed; read `${CLAUDE_SKILL_DIR}/../../AGENTS.md`
+only when the checkout has none.
+
+## Input
+
+`$ARGUMENTS` describes the aspect in a sentence or a paragraph:
+optionally a proposed title, a proposed place, and the questions it
+should answer. Examples: "Why have we named specific technologies?
+How does a project override one? Clarify and guide." or "Add a
+'Reference Implementation' pointer at the end". Empty arguments: ask
+for the aspect in one message and stop.
+
+## Procedure
+
+1. Read `AGENTS.md` end to end, the guideline's Contents, and the group
+   table in `lenses/README.md`. Read the sections the aspect touches
+   in full, and grep the guideline for the nouns the aspect uses, so
+   every existing mention is known before anything is written.
+2. Classify the aspect, and say which it is in the report:
+   - a **rule**: states what we do; it earns a `> **Principle:**`
+     callout and a lens;
+   - a **clarification**: sharpens a rule that exists; the rule's text
+     and its lens change in place, and no lens is added;
+   - a **rationale**: why the guideline is the way it is (why
+     technologies are named, why sections are unnumbered); it is prose,
+     it earns a lens only for the part a reviewer can check;
+   - a **pointer**: where to go next (a reference implementation, a
+     companion document); it is a short section or a paragraph and
+     earns no lens.
+3. Decide the shape by answering these questions, in the report and
+   before writing:
+   - New section, new subsection, a paragraph inside an existing
+     subsection, or one sentence at an existing mention? A rule with
+     more than one principle is a section; one principle is a
+     subsection; a qualification is a paragraph.
+   - Where does it live? In the section whose layer it touches, in
+     reading order; a rationale or a pointer goes at the end, after
+     `Cross-Cutting Conventions`. Which existing places should mention
+     it, with a named anchor link, at the first place a reader needs
+     it?
+   - Which principles does it state, and which lens group does each
+     map to (`lenses/README.md` says what each group covers)? New lens
+     or sharpened lens? A new lens takes the next id in its group and
+     cites the new section by title.
+   - Which vocabulary does it introduce? `make leaks` refuses product,
+     hardware, assistant-tooling, and history terms in the guideline
+     and the lenses; when the aspect needs one of them, rephrase in
+     the guideline's terms and say so in the report rather than
+     widening the list.
+   - What cascades? The Contents (`make gen-toc`); the review skills
+     (`make gen-skills`, driven by `lenses/README.md`); the scaffold
+     skills whose `Created` or `Changed` tables gain a file, or whose
+     section lists gain a section; `docs/adopting.md` when an adopter
+     must do something; `README.md` when a count or a summary changes;
+     `CHANGELOG.md` with the release level (a new or sharpened rule is
+     minor, a removed or reversed rule is major); `AGENTS.md` when a
+     new invariant appears.
+4. Write the guideline text first, in its voice: present tense, no
+   history and no rejected alternatives, one idea per paragraph,
+   wrapped at about 72 columns, no em-dashes, cross-references as
+   named anchor links, code snippets that show two entries and a
+   `# ...` line where a pattern repeats. When a term the aspect uses
+   is defined later in the document, link its first mention to that
+   section.
+5. Then the lenses, in the format `lenses/README.md` defines. Then
+   `make gen-toc` and `make gen-skills`. Then the hand-written skills
+   the aspect affects, the docs, the README, and the changelog.
+6. Search the repository for siblings of every change made: a second
+   snippet with the same pattern, a second place that mentions the
+   same noun without the link, a second table that lists what the
+   first one lists. Fix them in the same change.
+7. Run `make check` and fix what it reports. Report a pre-existing
+   failure and stop rather than editing unrelated files.
+
+Never commit. Never edit a file outside the checkout. Never add a rule
+the aspect does not state.
+
+## Output
+
+A short report, and nothing else:
+
+```markdown
+# New aspect: <title>
+
+**Kind.** rule | clarification | rationale | pointer
+**Shape.** <section | subsection | paragraph | sentence>, placed <where>
+**Mentions.** <existing places that now link to it>
+**Lenses.** <ids added or changed, with their groups>, or none, and why
+**Cascade.** <files changed outside the guideline and the lenses>
+**Changelog.** <the line added>, <minor | major | patch>
+**Vocabulary.** <terms rephrased for the leak checker>, or none
+**Check.** `make check` <passed | failed: what>
+**Open.** <questions the person should answer, or none>
+```

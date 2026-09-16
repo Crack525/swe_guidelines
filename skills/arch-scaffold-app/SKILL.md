@@ -7,11 +7,12 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash(make openapi), Bash(make chec
 # arch-scaffold-app
 
 Conventions: `${CLAUDE_SKILL_DIR}/../_shared/scaffold-conventions.md`.
-Sections of `${CLAUDE_SKILL_DIR}/../../architecture.md`: 10 (Clients
-Live in One Place, Realtime at the Edge), 12 (Apps Are Dumb, Push-First
-Apps), 14 (Layout Conventions), 15 (Stack, State and Data, Views,
-View-Models, Models, API Access, Realtime: One Channel per App, The
-Operator Console, The CLI Is Different).
+Sections of `${CLAUDE_SKILL_DIR}/../../architecture.md`: The Network
+Layer (Clients Live in One Place, Realtime at the Edge), Apps (Apps Are
+Dumb, Push-First Apps), Monorepo Folder Structure (Layout Conventions),
+Client App Architecture (Stack, State and Data, Views, View-Models,
+Models, API Access, Realtime: One Channel per App, The Operator
+Console, The CLI Is Different).
 
 ## Input
 

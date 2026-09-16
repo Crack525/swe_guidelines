@@ -12,11 +12,14 @@ lenses (`skills/`), and the checkers that keep the three consistent
   does not state.
 - `lenses/<group>.md` holds one group of lenses in the format
   `lenses/README.md` defines. Ids are `<PREFIX>-NN`; every lens cites
-  `Section N, Subsection`.
+  `Section title, Subsection`, by title and never by number.
 - `skills/arch-review-<group>/SKILL.md` is generated from
   `skills/_template/review.SKILL.md`; edit the template and run
   `make gen-skills`. The other skills are hand-written and share
-  `skills/_shared/scaffold-conventions.md`.
+  `skills/_shared/scaffold-conventions.md`. `skills/arch-new-aspect`
+  is the one skill that edits this repository itself: it incorporates
+  a new aspect into the guideline and cascades it through the lenses,
+  skills, docs, and changelog.
 - `agents/arch-reviewer.md` is the subagent `arch-review-full` fans out
   to. Its procedure and report shape mirror the review template by
   hand; a change to one is a change to both. The sentence "Never
@@ -32,6 +35,12 @@ lenses (`skills/`), and the checkers that keep the three consistent
 - No history in the guideline: it states what we do, in the present
   tense, with no rejected alternatives and no changelog phrasing.
 - No em-dashes anywhere.
+- No section numbers anywhere: headings are unnumbered, and every
+  cross-reference (in the guideline, the lenses, the skills, the docs)
+  names the section by title; inside the guideline it is a named
+  anchor link. Numbers shift when a section is inserted; titles do not.
+- The guideline's Contents block is generated (`make gen-toc`) and
+  checked (`make toc`).
 - Every lens cites a section and subsection that exist.
 - Every skill's `name` equals its folder name and starts with `arch-`;
   every `${CLAUDE_SKILL_DIR}/...` reference resolves; descriptions are
@@ -52,6 +61,12 @@ claude plugin validate . --strict   # manifests, skills, agents (when claude is 
 ## Conventions
 
 - Wrap prose at about 72 columns in the guideline and the lenses.
+- A concept the guideline uses before the section that defines it
+  carries a named anchor link to that section at its first mention.
+- A code snippet that shows a root with "one getter per X" shows two
+  getters and a `# ...` line, so the pattern reads at a glance.
+- When a fix is applied to one instance, search the repository for
+  its siblings and fix them in the same change.
 - Commit messages: a specific subject line, a short body naming the
   rule that changed and why.
 - A change that removes or reverses a rule is a major release; one

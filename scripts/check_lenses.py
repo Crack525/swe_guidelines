@@ -5,8 +5,9 @@ Rules:
 - every group listed in lenses/README.md has a file, and every file is listed;
 - lens headings are `## <PREFIX>-NN Title`, ids unique and numbered 01.. in order;
 - every lens has Principle, Source, Look for, Violation, Severity, in that order;
-- Source names a Section that exists in architecture.md, and when it names a
-  subsection after the comma, that subsection heading exists under the section;
+- Source names sections of architecture.md by title, never by number:
+  `<Section>` or `<Section>, <Subsection>`, several separated by `;`, where a
+  bare `<Subsection>` after a `;` belongs to the section cited before it;
 - Severity is high, medium, or low.
 
 Exit status is non-zero when any rule fails. Standard library only.
@@ -26,18 +27,28 @@ FIELDS = ("Principle", "Source", "Look for", "Violation", "Severity")
 SEVERITIES = {"high", "medium", "low"}
 HEADING = re.compile(r"^## ([A-Z]{2,3})-(\d{2}) (.+)$")
 FIELD = re.compile(r"^\*\*(Principle|Source|Look for|Violation|Severity)\.\*\*\s*(.*)$")
-SOURCE = re.compile(r"^Section (\d+)(?:,\s*(.+?))?$")
+NUMBERED = re.compile(r"\bSections? \d+")
 TABLE_ROW = re.compile(r"^\|\s*`([a-z]+)`\s*\|\s*`([a-z]+\.md)`\s*\|")
+SKIP_SECTIONS = {"Contents"}
 
 
-def sections() -> dict[int, set[str]]:
-    """Map section number to the set of its subsection titles."""
-    out: dict[int, set[str]] = {}
-    current: int | None = None
+def sections() -> dict[str, set[str]]:
+    """Map each section title to the set of its subsection titles, skipping fenced code."""
+    out: dict[str, set[str]] = {}
+    current: str | None = None
+    in_fence = False
     for line in GUIDELINE.read_text(encoding="utf-8").splitlines():
-        m = re.match(r"^## (\d+)\. ", line)
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        m = re.match(r"^## (.+)$", line)
         if m:
-            current = int(m.group(1))
+            current = m.group(1).strip()
+            if current in SKIP_SECTIONS:
+                current = None
+                continue
             out[current] = set()
             continue
         m = re.match(r"^### (.+)$", line)
@@ -56,48 +67,53 @@ def listed_groups() -> dict[str, str]:
 
 
 def check_source(
-    value: str, path: Path, ln: int, known: dict[int, set[str]], errors: list[str]
+    value: str, path: Path, ln: int, known: dict[str, set[str]], errors: list[str]
 ) -> None:
-    """A source is one or more citations separated by ';', each 'Section N[, Subsection]'."""
-    titles = {n: t for n, t in section_titles().items()}
+    """A source is one or more citations separated by ';'.
+
+    Each citation is `<Section>`, `<Section>, <Subsection>`, or, after a
+    previous citation, a bare `<Subsection>` of that section. Titles are
+    matched exactly against the headings of architecture.md.
+    """
+    if NUMBERED.search(value):
+        errors.append(f"{path.name}:{ln}: cites a section by number: '{value}'")
+        return
     citations = [c.strip().rstrip(".") for c in value.split(";") if c.strip()]
     if not citations:
         errors.append(f"{path.name}:{ln}: empty source")
         return
-    sec: int | None = None
+    sec: str | None = None
     for citation in citations:
-        sm = SOURCE.match(citation)
-        if sm:
-            sec = int(sm.group(1))
-            sub = sm.group(2) or ""
-        elif sec is not None:
-            sub = citation  # a bare subsection of the previously cited section
-        else:
-            errors.append(f"{path.name}:{ln}: '{citation}' does not read 'Section N, Subsection'")
+        citation = re.sub(r"\s*\([^)]*\)\s*$", "", citation).strip()
+        if citation in known:
+            sec = citation
             continue
-        sub = re.sub(r"\s*\([^)]*\)\s*$", "", sub).strip().rstrip(".")
-        if sec not in known:
-            errors.append(f"{path.name}:{ln}: Section {sec} does not exist")
-        elif sub and sub not in known[sec] and sub != titles.get(sec):
-            errors.append(f"{path.name}:{ln}: Section {sec} has no subsection '{sub}'")
+        head, _, tail = citation.partition(", ")
+        if head in known and tail.strip() in known[head]:
+            sec = head
+            continue
+        if sec is not None and citation in known[sec]:
+            continue
+        if head in known:
+            errors.append(f"{path.name}:{ln}: '{head}' has no subsection '{tail.strip()}'")
+        elif sec is not None:
+            errors.append(
+                f"{path.name}:{ln}: '{citation}' is neither a section nor a subsection of '{sec}'"
+            )
+        else:
+            errors.append(f"{path.name}:{ln}: '{citation}' is not a section of architecture.md")
 
 
-def section_titles() -> dict[int, str]:
-    out: dict[int, str] = {}
-    for line in GUIDELINE.read_text(encoding="utf-8").splitlines():
-        m = re.match(r"^## (\d+)\. (.+)$", line)
-        if m:
-            out[int(m.group(1))] = m.group(2).strip()
-    return out
-
-
-def check_file(path: Path, known: dict[int, set[str]], errors: list[str]) -> int:
+def check_file(path: Path, known: dict[str, set[str]], errors: list[str]) -> int:
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
     prefix: str | None = None
     expected = 1
     count = 0
     i = 0
+    for ln, line in enumerate(lines, start=1):
+        if NUMBERED.search(line):
+            errors.append(f"{path.name}:{ln}: refers to a section by number")
     while i < len(lines):
         m = HEADING.match(lines[i])
         if not m:
@@ -133,9 +149,6 @@ def check_file(path: Path, known: dict[int, set[str]], errors: list[str]) -> int
                 errors.append(f"{path.name}:{ln}: severity '{value}' is not high, medium, or low")
             if name == "Source":
                 check_source(value, path, ln, known, errors)
-            if name in ("Principle", "Look for", "Violation") and not value:
-                # multi-line field: the text may start on the next line
-                pass
         i = j
     if count == 0:
         errors.append(f"{path.name}: no lenses found")
@@ -153,6 +166,9 @@ def main() -> int:
     for name in files:
         if name not in groups.values():
             errors.append(f"lenses/{name} is not listed in lenses/README.md")
+    for ln, line in enumerate((LENSES / "README.md").read_text(encoding="utf-8").splitlines(), 1):
+        if NUMBERED.search(line):
+            errors.append(f"README.md:{ln}: refers to a section by number")
     total = 0
     for name in sorted(files):
         total += check_file(files[name], known, errors)

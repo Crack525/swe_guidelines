@@ -4,12 +4,12 @@ PYTHON := python3
 NPX := npx --yes
 MARKDOWNLINT := $(NPX) markdownlint-cli2@0.18.1
 
-.PHONY: help check lint lenses leaks links skills plugin gen-skills gen-skills-check clean
+.PHONY: help check lint lenses leaks links toc skills plugin gen-skills gen-skills-check gen-toc clean
 
 help:              ## show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
-check: lint lenses leaks links gen-skills-check skills plugin ## run every check (what CI runs)
+check: lint lenses leaks links toc gen-skills-check skills plugin ## run every check (what CI runs)
 
 lint:              ## markdownlint over every Markdown file
 	$(MARKDOWNLINT) "**/*.md" "#node_modules"
@@ -22,6 +22,9 @@ leaks:             ## no product, hardware, or assistant-tooling vocabulary in t
 
 links:             ## every relative link and anchor resolves
 	$(PYTHON) scripts/check_links.py
+
+toc:               ## the table of contents of architecture.md matches its headings
+	$(PYTHON) scripts/gen_toc.py --check
 
 skills:            ## every skill has valid frontmatter and references files that exist
 	$(PYTHON) scripts/check_skills.py
@@ -36,6 +39,9 @@ gen-skills:        ## regenerate the review skills from the template and the len
 
 gen-skills-check:  ## fail when a generated skill is out of date
 	$(PYTHON) scripts/gen_skills.py --check
+
+gen-toc:           ## regenerate the table of contents of architecture.md
+	$(PYTHON) scripts/gen_toc.py
 
 clean:             ## remove tool caches
 	rm -rf .markdownlint-cli2-cache node_modules
