@@ -16,11 +16,12 @@ result rather than chasing the cascade by hand.
 ## Where it runs
 
 The current working directory must be a checkout of the guideline
-repository: `architecture.md`, `lenses/README.md`, `AGENTS.md`, and
-`scripts/check_lenses.py` all present. Otherwise stop and say so. The
-copy under `${CLAUDE_SKILL_DIR}/../..` is the installed plugin, not
-the checkout being changed; read `${CLAUDE_SKILL_DIR}/../../AGENTS.md`
-only when the checkout has none.
+repository: `architecture.md`, `lenses/README.md`, `AGENTS.md`, and a
+`Makefile` with the `gen-toc`, `gen-skills`, and `check` targets all
+present. Otherwise stop and say so. The copy under
+`${CLAUDE_SKILL_DIR}/../..` is the installed plugin, not the checkout
+being changed; read `${CLAUDE_SKILL_DIR}/../../AGENTS.md` only when the
+checkout has none.
 
 ## Input
 
@@ -55,37 +56,49 @@ for the aspect in one message and stop.
      more than one principle is a section; one principle is a
      subsection; a qualification is a paragraph.
    - Where does it live? In the section whose layer it touches, in
-     reading order; a rationale or a pointer goes at the end, after
-     `Cross-Cutting Conventions`. Which existing places should mention
-     it, with a named anchor link, at the first place a reader needs
-     it?
+     reading order; a rationale or a pointer goes at the end of the
+     document, after the last section, a pointer after any rationale
+     already there. Which existing places should mention it, with a
+     named anchor link, at the first place a reader needs it? A
+     rationale or a pointer placed at the end is linked from the
+     introduction, so a reader who does not reach the end still finds
+     it.
+   - Does the proposed title hold? Keep it unless it carries history
+     or roadmap phrasing, punctuation that damages the anchor (a slash;
+     a colon is fine), or repeats the document's subject; when it
+     changes, list the proposed and the used title under Open.
    - Which principles does it state, and which lens group does each
      map to (`lenses/README.md` says what each group covers)? New lens
      or sharpened lens? A new lens takes the next id in its group and
      cites the new section by title.
    - Which vocabulary does it introduce? `make leaks` refuses product,
      hardware, assistant-tooling, and history terms in the guideline
-     and the lenses; when the aspect needs one of them, rephrase in
-     the guideline's terms and say so in the report rather than
+     and the lenses; `agents`, `AI`, `LLM`, `prompt`, and `claude` are
+     among them, so an automated actor is "a program" or "an automated
+     caller" in the guideline's own terms. When the aspect needs a
+     refused term, rephrase and say so in the report rather than
      widening the list.
    - What cascades? The Contents (`make gen-toc`); the review skills
      (`make gen-skills`, driven by `lenses/README.md`); the scaffold
      skills whose `Created` or `Changed` tables gain a file, or whose
      section lists gain a section; `docs/adopting.md` when an adopter
-     must do something; `README.md` when a count or a summary changes;
-     `CHANGELOG.md` with the release level (a new or sharpened rule is
-     minor, a removed or reversed rule is major); `AGENTS.md` when a
-     new invariant appears.
+     must do something or gains a place to look; `README.md` when a
+     count or a summary changes; `CHANGELOG.md` with the release level
+     (a new or sharpened rule is minor, a removed or reversed rule is
+     major, a pointer, a rationale, or a wording change that states no
+     new rule is patch); `AGENTS.md` when a new invariant appears.
 4. Write the guideline text first, in its voice: present tense, no
    history and no rejected alternatives, one idea per paragraph,
    wrapped at about 72 columns, no em-dashes, cross-references as
    named anchor links, code snippets that show two entries and a
    `# ...` line where a pattern repeats. When a term the aspect uses
-   is defined later in the document, link its first mention to that
-   section.
+   is defined elsewhere in the document, link its first mention to
+   that section.
 5. Then the lenses, in the format `lenses/README.md` defines. Then
-   `make gen-toc` and `make gen-skills`. Then the hand-written skills
-   the aspect affects, the docs, the README, and the changelog.
+   `make gen-toc` and `make gen-skills`; record under Cascade whether
+   any review skill was rewritten (a pointer or a rationale leaves all
+   seven unchanged). Then the hand-written skills the aspect affects,
+   the docs, the README, and the changelog.
 6. Search the repository for siblings of every change made: a second
    snippet with the same pattern, a second place that mentions the
    same noun without the link, a second table that lists what the
@@ -108,8 +121,9 @@ A short report, and nothing else:
 **Mentions.** <existing places that now link to it>
 **Lenses.** <ids added or changed, with their groups>, or none, and why
 **Cascade.** <files changed outside the guideline and the lenses>
-**Changelog.** <the line added>, <minor | major | patch>
+**Changelog.** <the entry added, in the file's own style: a bullet naming the file, the section title in quotes, what cascaded, and ending with the level>, <minor | major | patch>
 **Vocabulary.** <terms rephrased for the leak checker>, or none
+**Text.** <the first sentence of the guideline text added; the reviewer reads the rest in `git diff`>
 **Check.** `make check` <passed | failed: what>
 **Open.** <questions the person should answer, or none>
 ```

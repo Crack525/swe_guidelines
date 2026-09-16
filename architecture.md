@@ -8,7 +8,10 @@ cheaper first step, the step is named; where it has an exception, the
 exception is named too.
 
 The running example is a commerce platform with a catalog, orders, and
-inventory. The nouns are illustrative; the shapes are not.
+inventory. The nouns are illustrative; the shapes are not. One small
+project applies the whole document end to end; [Next: An End-to-End
+Reference Implementation](#next-an-end-to-end-reference-implementation)
+points at it.
 
 The document names technologies as well as shapes: Python and Pydantic,
 Postgres and SQLAlchemy, React and Vite, Terraform on AWS. The names
@@ -112,6 +115,7 @@ why they are named and how a project substitutes its own.
   - [Records of Decisions](#records-of-decisions)
 - [Technology Choices and How to Override Them](#technology-choices-and-how-to-override-them)
   - [Overriding a Choice](#overriding-a-choice)
+- [Next: An End-to-End Reference Implementation](#next-an-end-to-end-reference-implementation)
 <!-- /toc -->
 
 ## The Domain as the Source of Truth
@@ -2596,3 +2600,16 @@ a name.
 > **Principle:** A substitution is recorded once, in the project's own
 > ADR, with the rules the substitute must still satisfy. A change of
 > shape is a deviation, not a substitution.
+
+## Next: An End-to-End Reference Implementation
+
+This document describes a system one layer at a time, with a commerce
+platform as the running example. The next step is to apply it whole:
+one small, scoped project, fun to build, that follows every section
+end to end, from the object model at the center to the apps at the
+edge, in the shapes and the technologies named here.
+
+That project is Tadas, a to-do app for teams, used by people and by
+programs alike. Its repository is <https://github.com/baristaze/tadas>.
+A reader who wants to see a shape in running code rather than in a
+snippet starts there.

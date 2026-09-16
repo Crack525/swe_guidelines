@@ -2,8 +2,10 @@
 """Check that every relative Markdown link and image points at a file that exists.
 
 External links (http, https, mailto) are not fetched; CI has no reason to
-depend on the network. Anchors are checked only for headings in the same
-file. Exit status is non-zero on any broken link. Standard library only.
+depend on the network. A link whose text wraps across lines is checked
+like any other: the file is scanned with newlines read as spaces, so an
+anchor cannot hide behind a line break. Exit status is non-zero on any
+broken link. Standard library only.
 """
 
 from __future__ import annotations
@@ -42,8 +44,11 @@ def main() -> int:
     ]
     for path in sorted(files):
         own = headings(path)
-        for ln, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            for target in LINK.findall(line):
+        text = path.read_text(encoding="utf-8")
+        flat = text.replace("\n", " ")  # same length, so offsets map back to lines
+        for m in LINK.finditer(flat):
+            ln = text.count("\n", 0, m.start()) + 1
+            for target in [m.group(1)]:
                 if target.startswith(SKIP_PREFIXES[:3]):
                     continue
                 if target.startswith("#"):

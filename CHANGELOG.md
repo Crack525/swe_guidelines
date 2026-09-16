@@ -14,6 +14,12 @@ which number.
   project records substitutions in one ADR; lens `DEL-25`;
   `docs/adopting.md` step 3; `arch-scaffold-new` writes
   `docs/adr/0002-technology-choices.md`. Minor.
+- `architecture.md`: "Next: An End-to-End Reference Implementation",
+  a closing pointer to Tadas (<https://github.com/baristaze/tadas>), a
+  to-do app for teams that applies the guideline end to end; linked
+  from the introduction. Patch.
+- `scripts/check_links.py` checks a link whose text wraps across
+  lines; before, a line break hid the anchor from the checker.
 - `architecture.md`: a generated table of contents (`make gen-toc`,
   checked by `make toc`) and named anchor links at every
   cross-reference and at the first mention of a concept defined later.
