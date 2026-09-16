@@ -16,12 +16,13 @@ Options), Cross-Cutting Conventions (The App Container).
 
 ## Input
 
-`<worker-name> <WorkKind> [--queue <name>]`
+`<worker-name> <WorkKind> [--queue <name>] [--container]`
 
 Example: `shipment-notifier SHIPMENT_NOTIFY`. Both positional arguments
 are required; ask for them when missing. The queue defaults to
 `default`. `<worker>` is the worker name in snake case, `<Kind>` the
-work kind in CamelCase.
+work kind in CamelCase (`NOOP` gives `Noop`, `SHIPMENT_NOTIFY` gives
+`ShipmentNotify`).
 
 When the repository has no `work` namespace, this skill creates it
 first (the `Created` rows marked "work namespace"), then the worker.
@@ -33,18 +34,19 @@ Work namespace, under `om/src/<root>/om/work/` (only when absent):
 | File                                  | Holds                                                                                   |
 |---------------------------------------|-----------------------------------------------------------------------------------------|
 | `__init__.py`                         | `from .manager import WorkManagerInterface`                                             |
-| `manager.py`                          | `WorkManagerInterface`: `enqueue(ctx, item)`, `claim(queue, kinds, worker_id, lease) -> tuple[OpContext, WorkItem] \| None`, `complete(ctx, item)`, `fail(ctx, item, error)`, `defer(ctx, item, delay)`, `release(ctx, item)`, `extend_lease(ctx, item, lease)`, `requeue_stale()`, `maintenance_contexts()` |
+| `manager.py`                          | `WorkManagerInterface`: `enqueue(ctx, item)`, `claim(queue, kinds, worker_id, lease) -> tuple[OpContext, WorkItem] \| None` (the context carries `AppContext(type=WORKER, version="worker@<worker_id>")`), `complete(ctx, item)`, `fail(ctx, item, error)`, `defer(ctx, item, delay)`, `release(ctx, item)`, `extend_lease(ctx, item, lease)`, `requeue_stale()`, `maintenance_contexts()` (delegates to the tenancy manager's service contexts, one per live tenant, naming the org's founding user under the service role) |
 | `types/__init__.py`                   | empty                                                                                   |
 | `types/work_item.py`                  | `WorkKind`, `WorkStatus`, `WorkItem(Identifiable, Trackable)` with the queue's fields   |
 | `types/handler.py`                    | `WorkHandlerInterface.handle(ctx, item)`                                                |
 | `impl/__init__.py`                    | empty                                                                                   |
-| `impl/manager.py`                     | `WorkManagerImpl`: enqueue writes the row then publishes `WORK_AVAILABLE`; claim rebuilds the enqueuer's principal from `created_by` under the service role and returns it with the item; complete, requeue with a growing delay, or fail at `max_attempts`; defer and release hand back without spending an attempt |
+| `impl/manager.py`                     | `WorkManagerImpl`: enqueue writes the row then publishes `WORK_AVAILABLE`; claim rebuilds the enqueuer's principal from `created_by` under the service role and returns it with the item; complete, requeue with a growing delay, or fail at `max_attempts`, each after reading the row back and only while `claimed_by` still names the caller (the storage write is conditional on it); defer and release hand back without spending an attempt; the sweep is `requeue_stale(ctx)` per tenant, one conditional statement in storage |
+| `rules.py`                            | the pure arithmetic: `retry_delay`, `is_exhausted`, attempt and stagger bookkeeping; the manager and both storage impls call it |
 | `storage/__init__.py`                 | `WorkStorageInterface`: `write_item`, `claim_next(queue, kinds, worker_id, lease)` as one statement, `read_stale(before)`, `read_item` |
 | `storage/impl/__init__.py`            | empty                                                                                   |
 | `storage/impl/postgres.py`            | the claim as `SELECT ... FOR UPDATE SKIP LOCKED` in one method                          |
 | `storage/impl/memory.py`              | the same contract over an in-memory table and a lock                                    |
 | `storage/tables/__init__.py`          | empty                                                                                   |
-| `storage/tables/work_items.py`        | the table in the `queue` role, unique index on `idempotency_key`, index on `(queue, status, available_at)` |
+| `storage/tables/work_items.py`        | the table in the `queue` role, unique index on `idempotency_key`, index on `(queue, status, available_at)`, index on `(status, lease_expires_at)` for the sweep |
 | `om/migrations/sql/queue/<stamp>_work_items.up.sql` and `.down.sql`, `om/migrations/versions/queue/<stamp>_work_items.py` | the table and its wrapper |
 | `om/tests/unit/test_work_storage.py`, `om/tests/integration/test_work_storage_postgres.py` | claim exclusivity, lease, requeue |
 | `om/tests/unit/test_work_manager.py`  | enqueue publishes, claim returns the enqueuer's context, complete and defer             |
@@ -56,12 +58,13 @@ Worker, under `workers/<worker-name>/`:
 | `pyproject.toml`                           | the distribution; dependencies on `<root>-om` and `<root>-infra` through `[tool.uv.sources]`; a console entry point |
 | `src/<root>/workers/<worker>/__init__.py`  | empty                                                                                   |
 | `src/<root>/workers/<worker>/settings.py`  | one `BaseSettings`: queue, capacity, lease length, heartbeat interval, heartbeat failure limit, sweep interval |
-| `src/<root>/workers/<worker>/handler.py`   | `<Kind>HandlerImpl(WorkHandlerInterface)` taking managers by interface                  |
-| `src/<root>/workers/<worker>/loop.py`      | the loop: wake on `WORK_AVAILABLE` with a short poll fallback; claim `(queue, [<KIND>])` while a slot is free; run each item as a task that renews its lease and cancels itself when renewal fails for half the lease; heartbeat liveness and stop claiming after repeated failures; the maintenance sweep on a timer, every step idempotent and wrapped; drain on stop |
-| `src/<root>/workers/<worker>/main.py`      | settings, container, stop handlers, `serve` subcommand                                  |
+| `src/<root>/workers/<worker>/handler.py`   | `<Kind>HandlerImpl(WorkHandlerInterface)` taking the managers it needs by interface (none for the maintenance worker) |
+| `src/<root>/workers/<worker>/container.py` | `WorkerContainer.build(settings)` and `for_tests(storage, infra)`, the same shape and order as a service container |
+| `src/<root>/workers/<worker>/loop.py`      | the loop: wake on `WORK_AVAILABLE` with a short poll fallback; claim `(queue, [<KIND>])` while a slot is free; run each item as a task that renews its lease (each renewal bounded by `asyncio.wait_for` at the renewal interval, a timeout counting as a failure) and cancels itself when renewal fails for half the lease; heartbeat liveness as a key in `CacheScope.WORKER_LIVENESS` under the system scope, written and read back on every beat (a miss is a failed beat), and stop claiming after repeated failures; the maintenance sweep on a timer, every step idempotent and wrapped; drain on stop |
+| `src/<root>/workers/<worker>/main.py`      | settings, container, stop handlers, `serve` and `health` (reads the worker's own liveness key, exits non-zero when it is missing) subcommands |
 | `tests/test_handler.py`                    | the handler over the memory container, run twice with the same item                     |
 | `tests/test_loop.py`                       | claim within capacity, lease renewal, lease loss cancels the task, heartbeat failure pauses claiming, drain on stop |
-| `deployment/docker/<worker-name>.Dockerfile` | same shape as a service image, no exposed port                                        |
+| `deployment/docker/<worker-name>.Dockerfile` | same shape as a service image, no exposed port; its `HEALTHCHECK` runs the `health` subcommand |
 
 ## Changed
 
@@ -74,7 +77,7 @@ Worker, under `workers/<worker-name>/`:
 | `infra/src/<root>/infra/topics/__init__.py` (when absent) | `Topics.WORK_AVAILABLE` and its payload            |
 | `pyproject.toml` (root)                     | the member added to `[tool.uv.workspace] members`                |
 | `scripts/dev.sh`                            | starts the worker                                                |
-| `deployment/local/docker-compose.full.yml`  | the worker as a container                                        |
+| `deployment/local/docker-compose.full.yml` (with `--container`) | the worker as a container; without it `scripts/dev.sh` starts it on the host |
 
 ## Procedure
 

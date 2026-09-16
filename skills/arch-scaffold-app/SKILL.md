@@ -26,8 +26,9 @@ REST. `<app>` is the app name in snake case.
 
 ## Created
 
-Shared client package, under `packages/api-client/` (the first browser
-app creates it; the second imports it):
+Shared client package, under `clients/api-client/` (the first browser
+app creates it; the second imports it; `clients/` is where the
+guideline's tree keeps every typed client):
 
 | File                  | Holds                                                                                   |
 |-----------------------|-----------------------------------------------------------------------------------------|
@@ -42,14 +43,15 @@ Browser app (`portal` or `admin`), under `apps/<app-name>/`:
 
 | File                                                     | Holds                                                                     |
 |----------------------------------------------------------|---------------------------------------------------------------------------|
-| `package.json`, `tsconfig.json`, `vite.config.ts`        | the workspace package depending on `@<root>/api-client`, strict TypeScript, the Vite build, `vitest` with a `test` script |
+| `package.json`, `tsconfig.json`, `vite.config.ts`, `eslint.config.js` | the workspace package depending on `@<root>/api-client`, strict TypeScript, the Vite build, `vitest` with a `test` script, and the two lint rules that enforce Procedure 1 (no `fetch`, no import of `schema.d.ts` in feature code) |
 | `src/main.tsx`, `src/app/App.tsx`, `src/app/routes.tsx`  | the shell and the routes                                                  |
 | `src/app/RequireAuth.tsx` (portal) or `src/app/RequireAdmin.tsx` (admin) | the sign-in gate; the console renders the API's own refusal |
+| `src/features/sign_in/` (portal)                         | the sign-in screen the gate renders: login, org choice, exchange for a tenant session, in the same split as every screen |
 | `src/design/tokens.ts` and `src/design/kit/` (first browser app only) | design tokens and a minimal component kit; the second app imports the first app's |
-| `src/queries/keys.ts`, `src/queries/<domain>.ts`         | the query-key factory and one TanStack Query hooks module per domain      |
-| `src/store/<domain>.ts`                                  | one Zustand store for client state                                        |
-| `src/realtime/RealtimeProvider.tsx`, `envelopes.ts`, `router.ts`, `timeouts.ts` (portal only) | the one socket, the discriminated union on `type`, the router into the query cache, the ping interval read from the shared timeouts file |
-| `src/features/<screen>/<Screen>Page.tsx`, `use<Screen>Vm.ts`, `<screen>Model.ts`, `<screen>Model.test.ts` | one starter screen in the view, view-model, model split |
+| `src/queries/keys.ts`, `src/queries/<domain>.ts`         | the query-key factory (entity name first in every key, so the envelope router invalidates by name) and one TanStack Query hooks module per domain |
+| `src/store/<domain>.ts`                                  | one Zustand store per client-state domain; the session and the connection state are two |
+| `src/realtime/RealtimeProvider.tsx`, `envelopes.ts`, `router.ts`, `timeouts.ts` (portal only) | the one socket, the discriminated union on `type` (mirroring the service's `envelopes.py`), the router into the query cache, the last `seq` seen and the replay from `GET /v1/events?after_seq=` on reconnect or on a gap, the ping interval read from the shared timeouts file |
+| `src/features/<screen>/<Screen>Page.tsx`, `use<Screen>Vm.ts`, `<screen>Model.ts`, `<screen>Model.test.ts` | one screen per entity the API hosts, plus the home screen, each in the view, view-model, model split |
 | `README.md`                                              | the app's conventions in one page                                         |
 
 CLI, under `apps/<app-name>/`:
@@ -67,9 +69,9 @@ CLI, under `apps/<app-name>/`:
 
 | File                                    | Change                                                                   |
 |-----------------------------------------|--------------------------------------------------------------------------|
-| `pnpm-workspace.yaml` (browser app)     | `apps/*` and `packages/*` listed                                          |
+| `pnpm-workspace.yaml` (browser app)     | `apps/*` and `clients/*` listed                                           |
 | `package.json` (root, browser app)      | the workspace scripts for lint, typecheck, and test                       |
-| `Makefile`                              | the `openapi` target writes `packages/api-client/openapi.json` and runs `generate` |
+| `Makefile`                              | the `openapi` target writes `clients/api-client/openapi.json` and runs `generate` |
 | `deployment/realtime-timeouts.json` (portal, when absent) | the ping interval and load balancer idle timeout, asserted by a client test and a service test |
 | `pyproject.toml` (root, CLI)            | the member added to `[tool.uv.workspace] members`                         |
 | `scripts/dev.sh`                        | starts the browser app's dev server                                       |

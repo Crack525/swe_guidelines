@@ -24,7 +24,8 @@ the order the guideline presents them, never by number.
 2. Find the house style. Open one existing namespace, one storage impl,
    one router, and one test, and match their naming, import order, and
    docstring habits. The guideline decides the shape; the repository
-   decides the spelling.
+   decides the spelling. When bootstrapping there is nothing to open;
+   the guideline's snippets are the house style.
 3. Read the sections of `architecture.md` the skill names, in full.
 4. Check every path in the skill's `Created` table. A path that exists
    is a collision: stop and say so; never overwrite. A migration stamp
@@ -51,8 +52,8 @@ the order the guideline presents them, never by number.
 
 - Every entity is frozen and composes the mixins it needs in
   house-style order (`Identifiable`, `Named`, `Trackable`,
-  `SoftDeletable`), each an independent opt-in; an append-only record
-  is `Identifiable` alone. Ids come from `new_id()`, timestamps from
+  `SoftDeletable`), each an independent opt-in that a manager operation
+  exercises; an append-only record is `Identifiable` alone. Ids come from `new_id()`, timestamps from
   `utcnow()`.
 - Every manager and service operation takes `ctx: OpContext` first;
   every storage call takes `org_id: UUID` first. The exceptions are the
@@ -68,7 +69,10 @@ the order the guideline presents them, never by number.
   reuses the same cases against Postgres under the `integration`
   marker. Both impls sort by the `UUID` value, never by its string.
 - Every write follows authorize, verify, copy, write, and returns the
-  copy it wrote.
+  copy it wrote. The caller constructs the entity whole and hands it to
+  `create_<entity>`; the one exception is an entity that carries a
+  server-minted secret (an API key), whose `create_` takes the fields
+  and returns an `Issued...` shape once.
 - Feeds get a compound index on `(org_id, id)` and no single-column
   index on a column that already leads a compound one.
 - A namespace's exception family, when one is needed, is

@@ -43,6 +43,22 @@ which number.
 
 ### Changed
 
+- Scaffold skills sharpened from their first end-to-end run and the
+  full review of what they produced: `arch-scaffold-new` accepts a
+  fresh repository as its target, writes `specs/architecture.md`, the
+  `events` and `idempotency` namespaces, the migration module, the
+  contract-test layout, the Terraform modules and the deploy workflow,
+  and states the om/infra workspace dependency and where the role table
+  lives; `arch-scaffold-service` declares service interfaces from the
+  single-process start, a durable edge idempotency, a server span, a
+  boot helper, rate limits from settings, and the `after_seq` replay
+  route; `arch-scaffold-worker` gains a container, a `health`
+  subcommand, `rules.py`, bounded lease renewal, conditional writes,
+  and a per-tenant sweep; `arch-scaffold-app` moves the client package
+  to `clients/`, adds the sign-in screen, the lint config, and the
+  sequence-gap replay; `arch-scaffold-entity` composes the feed mixin
+  variant instead of redeclaring `org_id` and reads the current entity
+  before an update. Patch.
 - Sections are unnumbered. Every reference in the repository names a
   section by title; `scripts/check_lenses.py` refuses a number. The
   two `Principles` subsections are `Storage Principles` and

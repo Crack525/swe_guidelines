@@ -19,7 +19,9 @@ Database Roles, Migrations), The Network Layer (Public Types).
 Example: `inventory Warehouse address:str timezone:str`. The role
 defaults to `core`. Ask in one message for the fields not given and
 for the mixins: `Named`? `Trackable`? `SoftDeletable`? The answer
-"append-only" means `Identifiable` alone.
+"append-only" means `Identifiable` alone. A mixin is composed only
+when a manager operation exercises it: `Trackable` needs an update,
+`SoftDeletable` a delete.
 
 `<entity>` is the snake-case name, `<entities>` its plural, `<ns>` the
 namespace, `<role>` the role, `<stamp>` the minute stamp
@@ -30,11 +32,12 @@ namespace, `<role>` the role, `<stamp>` the minute stamp
 | File                                                         | Holds                                                                  |
 |--------------------------------------------------------------|------------------------------------------------------------------------|
 | `om/src/<root>/om/<ns>/types/<entity>.py`                     | the frozen entity, mixins in house-style order                          |
-| `om/src/<root>/om/<ns>/storage/tables/<entities>.py`          | the table class composing the matching mixins; the `(org_id, id)` index when the entity is a feed |
+| `om/src/<root>/om/<ns>/storage/tables/<entities>.py`          | the table class composing the matching mixins; a feed composes the feed variant of the identifiable mixin (no single-column `org_id` index) and declares the `(org_id, id)` index; no concrete table redeclares a mixin column |
 | `om/migrations/sql/<role>/<stamp>_<entities>.up.sql`          | `CREATE TABLE <role>.<entities>` with the mixin header block first    |
 | `om/migrations/sql/<role>/<stamp>_<entities>.down.sql`        | the matching `DROP TABLE`                                              |
 | `om/migrations/versions/<role>/<stamp>_<entities>.py`         | the wrapper: `revision = "<stamp>"`, `down_revision` = the role's current head, `run_sql(<role>, ...)` |
-| `om/tests/unit/test_<entity>_storage.py`                      | the storage contract over the memory impl, with a cross-tenant negative |
+| `om/tests/contracts/<entity>_storage.py`                      | the storage contract cases, with a cross-tenant negative, parameterised by a storage fixture |
+| `om/tests/unit/test_<entity>_storage.py`                      | the contract cases over the memory impl                                |
 | `om/tests/integration/test_<entity>_storage_postgres.py`      | the same cases over Postgres, marked `integration`                    |
 | `om/tests/unit/test_<entity>_manager.py`                      | the five operations over the memory storage                            |
 | `<api>/tests/test_<ns>_<entity>_api.py` (unless `--no-api`)   | the routes over the in-process app and memory container                |
@@ -51,11 +54,12 @@ namespace, `<role>` the role, `<stamp>` the minute stamp
 | `om/src/<root>/om/<ns>/storage/impl/memory.py`          | the same three methods over the in-memory table                                |
 | `om/src/<root>/om/storage/roles.py`                     | `"<entities>": DatabaseRole.<ROLE>` in the table-to-role map                   |
 | `om/src/<root>/om/<ns>/manager.py`                      | `get_<entities>(ctx, limit)`, `get_<entity>`, `create_<entity>`, `update_<entity>`, `delete_<entity>` |
-| `om/src/<root>/om/<ns>/impl/manager.py`                 | the five operations: authorize, verify, copy, write, return the copy           |
+| `om/src/<root>/om/<ns>/impl/manager.py`                 | the five operations: authorize, verify, copy, write, record the event, publish, return the copy |
 | `om/src/<root>/om/exceptions.py` (when a leaf is needed) | `class <Ns>Exception(PlatformException): ...` once, then leaves that multiply-inherit a shape |
 | `<api>/.../types/<ns>.py` (unless `--no-api`)           | `<Entity>View`, `Add<Entity>Request`, `Update<Entity>Request`                  |
 | `<api>/.../routers/<ns>.py` (unless `--no-api`)         | list (with `limit`), get, post, put, delete routes that translate and call the manager |
 | `<api>/.../routers/__init__.py` (when `<ns>` is new to it) | the router added to `all_routers()`                                       |
+| `packages/api-client/src/types.ts`, `apps/<portal>/src/queries/<ns>.ts`, `apps/<portal>/src/features/<entities>/` (when a portal exists) | the facade type, the query hooks, and the screen, in the shapes `arch-scaffold-app` defines |
 
 ## Procedure
 
@@ -65,11 +69,16 @@ namespace, `<role>` the role, `<stamp>` the minute stamp
 2. Lists filter `deleted_at IS NULL` only when the entity is
    `SoftDeletable`, in both impls.
 3. The router builds the entity for `create_<entity>` from the request
-   with `new_id()`, `utcnow()`, and `ctx.user_id`; `update_<entity>`
-   copies `updated_at`; `delete_<entity>` copies `deleted_at` and
+   with `new_id()`, `utcnow()`, and `ctx.user_id`; for
+   `update_<entity>` it reads the current entity through
+   `get_<entity>` and copies the request's fields onto it (the request
+   carries no `created_at` or `created_by`), and the manager copies
+   `updated_at`; `delete_<entity>` copies `deleted_at` and
    `deleted_by` when the entity is `SoftDeletable` and otherwise
    deletes the row through storage.
-4. Run the migration check for `<role>` after the fast gate.
+4. Run the migration check for `<role>` after the fast gate; it needs
+   Postgres, so it is the integration check against the compose stack
+   (`make test-integration`, or the migration CLI's `check`).
 
 ## Output
 
