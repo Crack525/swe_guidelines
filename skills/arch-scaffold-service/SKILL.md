@@ -39,9 +39,9 @@ Under `services/<service-name>/`:
 |-----------------------------------------------|------------------------------------------------------------------------------------------------|
 | `pyproject.toml`                              | the distribution; dependencies on `<root>-om`, `<root>-infra`, `fastapi`, `uvicorn`, `pydantic-settings`, `httpx` (dev); `[tool.uv.sources]` for the workspace members; a console entry point |
 | `src/<root>/services/<svc>/__init__.py`       | empty                                                                                          |
-| `src/<root>/services/<svc>/settings.py`       | one `BaseSettings` with the product prefix, including `app_type` for `--app`                    |
+| `src/<root>/services/<svc>/settings.py`       | one `BaseSettings` with the product prefix, including `app_type` for `--app` and `allowed_origins` (the browser apps' origins; empty refuses every cross-origin request)                    |
 | `src/<root>/services/<svc>/container.py`      | `AppContainer.build(settings)` (storage, then infra, then managers), `for_tests(storage, infra)`, `start()`, `close()` |
-| `src/<root>/services/<svc>/app.py`            | `create_app(container=None)`: settings first, then logging, trust store, and tracing (one `boot(settings)` helper every subcommand calls), then the container, then middleware in fixed order (the request-id middleware opens the server span), routers under `/v1`, health routes, lifespan calling `start()` and `close()` |
+| `src/<root>/services/<svc>/app.py`            | `create_app(container=None)`: settings first, then logging, error reporting, trust store, and tracing (one `boot(settings)` helper every subcommand calls), then the container, then middleware in fixed order (CORS from `allowed_origins` first; the request-id middleware opens the server span), routers under `/v1`, health routes, lifespan calling `start()` and `close()` |
 | `src/<root>/services/<svc>/gateway/__init__.py` | empty                                                                                        |
 | `src/<root>/services/<svc>/gateway/auth.py`   | credential parsing by prefix, `current_context` dependency, `Ctx` alias, the app-header check   |
 | `src/<root>/services/<svc>/gateway/admin.py`  | the operator gate producing `AdminContext` for `/v1/admin/*`, `AdminCtx` alias                  |
@@ -57,12 +57,12 @@ Under `services/<service-name>/`:
 | `src/<root>/services/<svc>/impl/<ns>.py`      | `<Ns>ServiceImpl`, composing managers (and sibling service clients at a split): translate, call one manager, project; every router function is one call into it |
 | `src/<root>/services/<svc>/realtime/` (with `--realtime`) | `ticket.py` (the route that asks the tenancy manager to issue the ticket; redemption is the manager's, atomic, and re-checks the credential named by `ctx.security.credential_id`), `socket.py` (the route, subscribe, unsubscribe, ping), `outbox.py` (the bounded per-socket outbox and drainer), `envelopes.py` (typed envelopes on the `View` base with a curated payload view, never a dumped internal payload, carrying the event's `seq`; the portal's `envelopes.ts` mirrors it by hand, since socket frames are not in OpenAPI) |
 | `src/<root>/services/<svc>/routers/events.py` (with `--realtime`) | `GET /v1/events?after_seq=&limit=` over the events manager, the replay a reconnecting client uses |
-| `src/<root>/services/<svc>/main.py`           | `serve`, `migrate` (forwards to the OM migration CLI), `bootstrap` (org, slug, email, password, display name, `--operator`), `openapi` subcommands |
+| `src/<root>/services/<svc>/main.py`           | `serve`, `migrate` (forwards to the OM migration CLI), `bootstrap` (org, slug, email, password, display name, `--operator`; with `--seed`, reads the development org and owner from settings, refuses at start when the database URL is not a local address, and exits without writing when the org's slug already exists), `openapi` subcommands |
 | `tests/conftest.py`                           | the app over `AppContainer.for_tests(StorageMemoryImpl(), InfraLocalImpl(tmp_path))` and `httpx.AsyncClient(transport=ASGITransport(app=app))`, run inside the lifespan |
 | `tests/test_health.py`                        | `/healthz` and `/readyz`                                                                        |
 | `tests/test_<ns>_api.py`                      | one round trip per hosted namespace (seeding an org and its owner through the tenancy manager first), plus the error envelope and one rate-limited route |
 | `tests/test_realtime_timeouts.py` (with `--realtime`) | asserts the ping interval and idle timeout against `deployment/realtime-timeouts.json`, the service half of the shared-file rule |
-| `deployment/docker/<service-name>.Dockerfile` | two stages, locked install of this package, non-root, healthcheck on `/healthz`                |
+| `deployment/docker/<service-name>.Dockerfile` | two stages on a base image at the Python release `.python-version` names, locked install of this package, non-root, healthcheck on `/healthz` |
 
 The service interface and impl exist from the single-process start,
 so a split later moves a module instead of extracting one; routers
@@ -75,6 +75,7 @@ hold no logic of their own at any stage.
 | `pyproject.toml` (root)                 | the member added to `[tool.uv.workspace] members`                                |
 | `Makefile`                              | the `openapi` target emits this service's document into `packages/api-client/openapi.json` when that package exists, else next to the service; the app skill moves it |
 | `scripts/dev.sh`                        | starts the service on its port                                                   |
+| `README.md` (root)                      | a row in the `Local URLs` table: the service's interactive API docs at `http://localhost:<port>/docs` |
 | `deployment/local/docker-compose.full.yml` (with `--container`) | the service as a container                                 |
 | `services/<existing>/gateway/` (when a service already exists) | moved into a workspace distribution `gateway/` that every service imports; nothing is copied |
 

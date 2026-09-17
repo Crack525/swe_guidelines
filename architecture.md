@@ -110,10 +110,12 @@ why they are named and how a project substitutes its own.
   - [Exceptions](#exceptions)
   - [Logs](#logs)
   - [Traces and Metrics](#traces-and-metrics)
+  - [Error Tracking](#error-tracking)
   - [Configuration](#configuration)
   - [The App Container](#the-app-container)
   - [Records of Decisions](#records-of-decisions)
 - [Technology Choices and How to Override Them](#technology-choices-and-how-to-override-them)
+  - [Versions](#versions)
   - [Overriding a Choice](#overriding-a-choice)
 - [Next: An End-to-End Reference Implementation](#next-an-end-to-end-reference-implementation)
 <!-- /toc -->
@@ -1049,7 +1051,8 @@ the constructor.
     infra handles through their constructors, never through globals,
     thread locals, or `OpContext`.
 -   Observability is the one capability used through its vendor API
-    directly (see [Traces and Metrics](#traces-and-metrics)).
+    directly (see [Traces and Metrics](#traces-and-metrics) and [Error
+    Tracking](#error-tracking)).
 -   Every impl can `describe()` itself in one line, and the container
     logs the chosen backends once at start, so an operator reading a
     boot log knows exactly what a process is talking to.
@@ -1450,6 +1453,9 @@ The gateway owns a short list of edge concerns, each done once:
     short-lived ticket minted by an authenticated request, never with a
     long-lived credential in a URL. Redeeming the ticket re-checks the
     credential behind it.
+-   **Origins.** Cross-origin requests are accepted only from the
+    browser apps' origins, a list read from settings; every other
+    origin is refused.
 -   **Request id.** The gateway accepts an inbound `x-request-id` or
     mints one, stamps it on the context, echoes it in the response
     header, and attaches it to the log context and the trace span.
@@ -1472,6 +1478,8 @@ The gateway owns a short list of edge concerns, each done once:
 -   **Health.** `/healthz` answers liveness with the version and no
     I/O; `/readyz` awaits the storage healthcheck; `/metrics` exposes
     counters and histograms. All three sit outside the versioned API.
+    The load balancer answers `/metrics` with a 404; only the collector
+    beside the process reads it.
 -   **Versioning.** The API prefix (`/v1`) is applied once, where
     routers are mounted. Routers declare only their own sub-paths.
 
@@ -2072,8 +2080,49 @@ container runtime. Every environment has the same module graph, and
 everything that differs between two environments is a variable, so a
 service that runs in the smaller environment runs in production with
 nothing more than scale changes. Production does not rebuild: it
-promotes the images the smaller environment already ran, by digest,
-behind an approval gate.
+promotes what the smaller environment already ran, behind an approval
+gate: service and worker images by digest, browser bundles by build
+id.
+
+A browser app is a static bundle (see [Client
+Rendering](#client-rendering)), and it ships from a private S3 bucket
+served through CloudFront, one bucket and one distribution per app per
+environment. The bucket blocks public access and only its distribution
+reads it. Both are declared in Terraform next to the services, so an
+environment that serves the API serves its browser apps too. The
+distribution serves files only; every call the app makes to the
+platform still goes through [the gateway](#the-gateway).
+
+The bundle is built once. What differs between environments (the API
+origin, the error-tracking DSN, the environment name) is read at start
+from a `config.json` that each environment's deploy writes next to the
+bundle, so production receives the files the smaller environment
+already served.
+
+Every environment has one base domain, a variable like any other.
+Production's base domain is the product's own domain, `<domain>`; a
+smaller environment's is a subdomain of it, such as `dev.<domain>`.
+Under the base domain, `api.` is the gateway, sockets included, `app.`
+is the portal, and `admin.` is the operator console, so each browser
+app is its own origin and the API is another. In production the bare
+`<domain>` is the company website, which is not part of the platform.
+
+> **Principle:** Services and workers run on the container runtime.
+> Browser apps ship from a private S3 bucket through CloudFront, built
+> once and promoted. `api.`, `app.`, and `admin.` sit under each
+> environment's base domain.
+
+Every environment collects what its processes emit; an endpoint
+nothing reads is not observability. Logs leave through the container
+runtime's log driver into one log group per process, with retention
+set. Metrics and traces leave through an OpenTelemetry collector
+running beside each task: it scrapes `/metrics` and receives spans
+over localhost, forwards both to CloudWatch and X-Ray, and adds only
+the service and the environment as dimensions, because every distinct
+dimension value is billed as its own series. The collector is marked
+non-essential, so its failure never stops the application. Error
+events go straight to the tracker (see [Error
+Tracking](#error-tracking)).
 
 ### Infrastructure as Code
 
@@ -2089,15 +2138,45 @@ every environment are part of CI.
 ### Local: Docker Compose
 
 Local development and tests run entirely on the developer's machine.
-Every technology piece the platform depends on (Postgres, the cache,
-the object store, the queue) runs as a local container through a single
-`docker-compose` stack, using the cloud's images where possible or a
-wire-compatible stand-in where not. Application processes run on the
-host, started by one script, so a code change is a restart and a
+Every technology piece the platform depends on (Postgres, Valkey as
+the cache, the object store, the queue) runs as a local container
+through a single `docker-compose` stack, using the cloud's images where
+possible or a wire-compatible stand-in where not, each at the version
+[Versions](#versions) sets. Application processes run on the host,
+started by one script, so a code change is a restart and a
 debugger attaches without ceremony; a second compose file runs the
-application containers too. An optional profile adds developer
-dashboards (a database browser, metrics, traces) that nothing in CI
-depends on.
+application containers too.
+
+Developer dashboards live in an optional compose profile named `devx`,
+started only when a developer asks for it and never by CI. The profile
+holds one browser per backing service the stack runs (pgweb for
+Postgres, Valkey Admin for the cache, the console of the object store
+or the queue where its local image ships one, Jaeger for traces,
+GlitchTip for errors) and the metrics view, each on a host port read
+from the same `.env` as the rest of the stack.
+
+The repository's `README.md` lists every local URL a developer opens:
+each dashboard, the interactive API docs of each service, and each
+browser app. A developer inspecting data, trying an operation, or
+debugging a flow reaches the right page without reading the compose
+file or the start script.
+
+A freshly migrated local database is seeded with one command,
+`make seed`, which runs the service's `bootstrap` subcommand (see
+[Layout Conventions](#layout-conventions)) with a development org and
+its owner read from `.env`: an owner address on the reserved `.example`
+domain, such as `owner@acme.example`, and a development password, such
+as `pswd_1234`. Running it again changes nothing. The `README.md`
+lists the command and the seeded sign-in next to the local URLs, so a
+developer goes from a clone to a signed-in session without creating an
+account by hand.
+
+Four shortcuts cover the whole stack. `make up` starts everything in
+containers, the application and the `devx` profile included, migrates,
+seeds, and prints the local URLs; `make down` stops it all and keeps
+the data for the next `make up`; `make reset` wipes every local
+container and volume and runs `make up` again; `make urls` prints the
+local URLs, read from the same `.env` as the ports.
 
 > **Principle:** Every dependency runs in a local container. The
 > application runs on the host.
@@ -2123,7 +2202,8 @@ the real service, and that list stays short.
 Settings that are only safe locally are refused by the process, not by
 a checklist: a production-named environment on the file secrets
 backend, a twin selected off a loopback origin, a worker registered
-under the wrong tenant. Each refusal is a one-line check at boot that
+under the wrong tenant, the development seed against a database that
+is not local. Each refusal is a one-line check at boot that
 exits naming the setting. A boot that succeeds logs one line naming
 every backend it chose.
 
@@ -2295,9 +2375,11 @@ and declares a healthcheck against `/healthz`.
 Workspace tooling lives at the repo root: a single `pyproject.toml`
 declares the uv workspace members, a single `package.json` plus
 `pnpm-workspace.yaml` declares the TypeScript members, and lint,
-format, and type-check config sit next to them. `make check` is the
-fast local gate (lint, format, types, unit tests) and CI runs it plus
-the integration, migration, image, and infrastructure jobs.
+format, and type-check config sit next to them. `.python-version` and
+`.nvmrc` pin the runtimes at the releases [Versions](#versions) sets.
+`make check` is the fast local gate (lint, format, types, unit tests)
+and CI runs it plus the integration, migration, image, and
+infrastructure jobs.
 
 > **Python tip:** a top-level package named `platform` shadows the
 > standard-library module of the same name. Pick a product-specific
@@ -2308,13 +2390,15 @@ the integration, migration, image, and infrastructure jobs.
 ### Stack
 
 The client stack is React + TypeScript on Vite. The portal builds to a
-static SPA served behind the gateway; the operator console is a second
-application on the same stack; the CLI is Python and lives outside this
-stack. Vite builds a static bundle and nothing else, which keeps the
-[Apps Are Dumb](#apps-are-dumb) rule enforced by construction: there is
-no place in the app to put backend logic. Vite is chosen over a
-server-rendering framework because [Client Rendering](#client-rendering)
-rules server-side rendering out, so the simpler tool wins.
+static SPA whose files are served through CloudFront (see [Cloud:
+AWS](#cloud-aws)) and whose calls to the platform are served behind [the
+gateway](#the-gateway); the operator console is a second application on
+the same stack; the CLI is Python and lives outside this stack. Vite
+builds a static bundle and nothing else, which keeps the [Apps Are
+Dumb](#apps-are-dumb) rule enforced by construction: there is no place
+in the app to put backend logic. Vite is chosen over a server-rendering
+framework because [Client Rendering](#client-rendering) rules
+server-side rendering out, so the simpler tool wins.
 
 > **Principle:** One React + TypeScript stack for every browser app.
 > The CLI stays Python.
@@ -2384,9 +2468,10 @@ never into components.
 
 ### The Operator Console
 
-The operator console is a separate application that shares the
-portal's stack, design tokens, component kit, sign-in flow, and API
-client, and never its security context. It has its own origin, its own
+The operator console is a separate application that shares the portal's
+stack, design tokens, component kit, sign-in flow, and API client, and
+never its security context. It has its own origin (`admin.` under the
+environment's base domain, see [Cloud: AWS](#cloud-aws)), its own
 bundle, and its own routes under `/v1/admin/*`. It holds no realtime
 socket. Its authority comes from the operator allowlist and the
 credential-provenance check of [The Gateway](#the-gateway), not from a
@@ -2487,10 +2572,37 @@ Metrics are counters and histograms exposed on `/metrics` in the
 Prometheus exposition format, again through the client library
 directly. Every request counts once with its route template and
 status; every queue, cache, and rate limit has a counter with an
-outcome label.
+outcome label. Label values are bounded: a template, a status, an
+outcome, never an id.
+
+Every process serves `/metrics`, workers included. A worker has no
+API, so it serves the endpoint alone on a small port of its own.
 
 > **Principle:** OpenTelemetry for traces, a Prometheus endpoint for
 > metrics, both used directly. The backend is a config detail.
+
+### Error Tracking
+
+Errors are reported through the Sentry SDK, used directly, to any
+tracker that speaks its protocol. The SDK is initialized at boot in
+every process: each web service, each worker, and each browser app.
+An unhandled exception and an `ERROR` log record each become an event
+tagged with the service, the release, and the request id, so an event
+leads to its log lines and its trace.
+
+Reporting is off until a DSN is set, and an empty value or `off`
+means unset, so a missing tracker never stops a boot. Locally the
+`devx` profile runs GlitchTip seeded with a fixed project key, so the
+DSN in `.env` works without a visit to its UI.
+
+A browser app reports from each route's error element and from the
+React root's error callbacks. The router catches a render error before
+a single top-level boundary sees it, so one boundary alone reports
+nothing.
+
+> **Principle:** Every process reports errors, the browser app
+> included. Reporting turns on when a DSN is set and never blocks a
+> boot.
 
 ### Configuration
 
@@ -2503,6 +2615,11 @@ which identity provider, real or twin. A manager or a service impl
 receives the resulting handles and options through its constructor
 and never reads an environment variable itself.
 
+A browser app reads its settings the same way, once at start, from
+the `config.json` deployed next to its bundle (see [Cloud:
+AWS](#cloud-aws)). Nothing that differs between environments is
+compiled into the bundle.
+
 Runtime variation that belongs to the product (which tenant may do
 what, which plan allows which limit) is a modelled entity with a
 manager and a storage. A feature flag, on the rare day one is needed,
@@ -2514,10 +2631,10 @@ is a vendor SDK used directly with its client injected at boot.
 ### The App Container
 
 Every process, service or worker, boots the same way. Settings are
-read. Logging, the trust store, and tracing are configured. Storage is
-built, then infra, then the managers, in that order, and handed to
-whatever runs on top: routers resolve them per request from one
-container object; a worker loop holds them directly. The container has
+read. Logging, error reporting, the trust store, and tracing are
+configured. Storage is built, then infra, then the managers, in that
+order, and handed to whatever runs on top: routers resolve them per
+request from one container object; a worker loop holds them directly. The container has
 `start()` and `close()`, called from the process lifespan, and
 `close()` unwinds in reverse order. A test constructs the same
 container over the in-memory storage root and the local infra root and
@@ -2543,11 +2660,12 @@ that fails the build holds.
 
 This document names technologies, not only shapes. The object model is
 Python on Pydantic; storage is SQLAlchemy and Alembic over Postgres;
-infrastructure impls target a hosted cache, an S3-like object store,
-and a hosted queue; browser apps are React and TypeScript on Vite with
-TanStack Query and Zustand; workspaces are uv and pnpm; the local stack
-is Docker Compose; the cloud is AWS, declared in Terraform; traces are
-OpenTelemetry and metrics are Prometheus.
+infrastructure impls target Valkey as the cache, an S3-like object
+store, and a hosted queue; browser apps are React and TypeScript on
+Vite with TanStack Query and Zustand; workspaces are uv and pnpm; the
+local stack is Docker Compose; the cloud is AWS, declared in Terraform,
+with browser apps on S3 and CloudFront; traces are OpenTelemetry,
+metrics are Prometheus, and errors go through the Sentry SDK.
 
 The names are a choice, and a practical one. Python carries most
 backend work and TypeScript most front-end work, so both stacks have
@@ -2568,6 +2686,31 @@ shape.
 
 > **Principle:** Named technologies are defaults. The shapes are the
 > guideline; the names make the shapes concrete.
+
+### Versions
+
+Every dependency runs on its latest stable release: the language
+runtimes (Python, Node), the workspace and package tools (uv, pnpm),
+the container engine (Docker), the backing services (Postgres, the
+cache, the queue), and the libraries every workspace member installs.
+
+Where a technology publishes a long-term support line, the version is
+the current active LTS release, not a newer line that has not entered
+it. Where a technology publishes no such line, the version is the
+newest stable release its maintainers recommend. Pre-releases, release
+candidates, and lines past their end of life are not used.
+
+The version is stated where the tool reads it: `.python-version` and
+`requires-python` for Python, `.nvmrc` for Node, the `packageManager`
+field of `package.json` for pnpm, the base image of every Dockerfile,
+the image tags of the [local compose stack](#local-docker-compose), the
+runtime steps of CI, and the engine versions declared in Terraform.
+The lock files hold the libraries at the versions those declarations
+resolve.
+
+> **Principle:** Every dependency runs on its latest stable release:
+> the current active LTS line where one exists, the newest stable
+> release otherwise.
 
 ### Overriding a Choice
 

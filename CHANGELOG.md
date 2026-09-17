@@ -8,6 +8,71 @@ which number.
 
 ### Added
 
+- `architecture.md`: "Error Tracking", a subsection of "Cross-Cutting
+  Conventions": every web service, worker, and browser app reports
+  errors through the Sentry SDK, tagged with service, release, and
+  request id, off until a DSN is set, the browser app reporting from
+  each route's error element and the React root; "Traces and Metrics"
+  bounds label values and has every process serve `/metrics`, a worker
+  on its own port; "Cloud: AWS" collects logs through the log driver
+  with retention and metrics and traces through a non-essential
+  collector; "The Gateway" answers `/metrics` with a 404 at the load
+  balancer; "Local: Docker Compose" adds GlitchTip to `devx`; lens
+  `DEL-27`; lenses `DEL-02`, `DEL-04`, `DEL-20`, `NET-10`, and `CON-16`
+  sharpened; `arch-scaffold-new`, `arch-scaffold-service`,
+  `arch-scaffold-worker`, and `arch-scaffold-app` wire error reporting,
+  the worker metrics port, and the collector; `README.md` lens count.
+  Minor.
+- `architecture.md`: "Cloud: AWS" ships each browser app from a private
+  S3 bucket served through CloudFront, declared in Terraform in every
+  environment, while the app's calls to the platform stay behind the
+  gateway; production promotes browser bundles by build id as it
+  promotes images by digest, each bundle reading a `config.json` its
+  environment writes; every environment has a base domain with `api.`,
+  `app.`, and `admin.` under it; "Stack" separates serving files from
+  serving the platform; "The Gateway" accepts cross-origin requests
+  only from the browser apps' origins; "Configuration" and "The
+  Operator Console" follow; "Technology Choices and How to Override
+  Them" names the hosting; lenses `DEL-02`, `DEL-21`, and `NET-06`
+  sharpened; `arch-scaffold-app` creates the `static-site` module, the
+  config loader, and a build-once deploy, and refuses to finish without
+  them; `arch-scaffold-service` adds the allowed origins;
+  `arch-scaffold-new` wires the base domain and `api.` and requires the
+  portal's deployment. Minor.
+
+### Changed
+
+- `architecture.md`: "Local: Docker Compose" names the developer
+  dashboard profile `devx` (pgweb, Valkey Admin, the local images'
+  consoles, Jaeger for traces, the metrics view, ports from `.env`) and
+  has the repository's `README.md` list the local URL of each
+  dashboard, each service's API docs, and each browser app; lens
+  `DEL-04` sharpened; `arch-scaffold-new` writes the profile, a
+  `devx-up` target, the ports in `.env.example`, and the `Local URLs`
+  table in `README.md`; `arch-scaffold-service` and `arch-scaffold-app`
+  add their rows to it. Minor.
+- `architecture.md`: "Technology Choices and How to Override Them" and
+  "Local: Docker Compose" name Valkey as the cache; the `devx` profile
+  browses it with Valkey Admin; `arch-scaffold-new` runs the Valkey
+  image locally and depends on the `valkey-glide` client. Minor.
+- `architecture.md`: "Local: Docker Compose" adds `make seed`, which
+  bootstraps a development org and owner from `.env` (an `.example`
+  address and a development password), changes nothing on a second
+  run, and is listed with the seeded sign-in in `README.md`; "What a
+  Process Refuses" refuses the seed against a non-local database;
+  lenses `DEL-04` and `DEL-06` sharpened; `arch-scaffold-new` writes
+  the target, the seed settings, and the README quick start and runs
+  the seed twice; `arch-scaffold-service` adds `bootstrap --seed`.
+  Minor.
+- `architecture.md`: "Local: Docker Compose" adds the `make up`,
+  `make down`, `make reset`, and `make urls` shortcuts; lens `DEL-04`
+  looks for them; `arch-scaffold-new` writes them and leads the README
+  quick start with `make up`. Minor.
+
+## 0.2.0 (2026-09-17)
+
+### Added
+
 - `architecture.md`: the Software Design and Architecture Guidelines.
 - `architecture.md`: "Technology Choices and How to Override Them",
   a section that says why the guideline names technologies and how a
@@ -18,6 +83,19 @@ which number.
   a closing pointer to Tadas (<https://github.com/baristaze/tadas>), a
   to-do app for teams that applies the guideline end to end; linked
   from the introduction. Patch.
+- `architecture.md`: "Versions", a subsection of "Technology Choices
+  and How to Override Them": every dependency runs on its latest
+  stable release, the current active LTS line where one exists; linked
+  from "Local: Docker Compose" and "Layout Conventions"; lens `DEL-26`;
+  `arch-scaffold-new`, `arch-scaffold-service`, and the scaffold
+  conventions pin new runtimes, images, and libraries at those
+  releases; this repository's CI moves to Python 3.14, Node 24.21.0,
+  and the latest action and markdownlint releases (MD060, new in that
+  release, is off like MD013). Minor.
+- `skills/arch-upgrade-deps`: moves every dependency of a project to
+  its latest stable or LTS release from the maintainers' release data,
+  runs the fast and integration gates, and holds back an upgrade that
+  breaks them.
 - `scripts/check_links.py` checks a link whose text wraps across
   lines; before, a line break hid the anchor from the checker.
 - `architecture.md`: a generated table of contents (`make gen-toc`,
@@ -26,13 +104,13 @@ which number.
 - `skills/arch-new-aspect`: incorporates a new aspect into the
   guideline and cascades it through lenses, skills, docs, README, and
   this changelog.
-- `lenses/`: 138 review lenses in seven groups, each citing its
+- `lenses/`: 139 review lenses in seven groups, each citing its
   section by title.
 - Skills: `arch-review-<group>` for each group, `arch-review-full`,
   `arch-scaffold-new`, `arch-scaffold-namespace`,
   `arch-scaffold-entity`, `arch-scaffold-service`,
   `arch-scaffold-worker`, `arch-scaffold-app`, `arch-explain`,
-  `arch-deviate`.
+  `arch-deviate`, `arch-upgrade-deps`.
 - `agents/arch-reviewer.md`: the subagent the full review fans out to.
 - Plugin and marketplace manifests under `.claude-plugin/`.
 - Checkers: markdownlint, lens format and citations, vocabulary leaks,
@@ -43,6 +121,12 @@ which number.
 
 ### Changed
 
+- Scaffolded CI runs every gate the guideline's "Layout Conventions"
+  and "Migrations" name: `arch-scaffold-new` writes `lint`,
+  `format-check`, `typecheck`, and `migrate-roundtrip` targets, states
+  that `check` runs lint, format, types, and unit tests, and adds the
+  round trip to the integration job; `arch-scaffold-app` adds the
+  browser app's lint, typecheck, and test scripts to `check`. Patch.
 - Scaffold skills sharpened from their first end-to-end run and the
   full review of what they produced: `arch-scaffold-new` accepts a
   fresh repository as its target, writes `specs/architecture.md`, the

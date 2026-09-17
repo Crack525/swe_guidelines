@@ -39,28 +39,45 @@ service holding a rule a second app later copies.
 
 **Severity.** high
 
-## DEL-02 One cloud, environments that differ by variables, promotion by digest
+## DEL-02 One cloud, environments that differ by variables, promotion without a rebuild
 
-**Principle.** Cloud deployments target AWS. Every environment has the
-same module graph; everything that differs between two environments is
-a variable, so the smaller environment predicts production with
-nothing more than scale changes. Production does not rebuild: it
-promotes the images the smaller environment already ran, by digest,
-behind an approval gate.
+**Principle.** Cloud deployments target AWS. Services and workers run
+on the container runtime; each browser app ships from a private S3
+bucket served through CloudFront. Every environment has the same
+module graph; everything that differs between two environments is a
+variable, the base domain included, under which `api.` is the gateway,
+`app.` the portal, and `admin.` the operator console. Production does
+not rebuild: it promotes images by digest and browser bundles by build
+id, behind an approval gate, and a bundle reads what differs between
+environments from a `config.json` deployed next to it. Every
+environment collects what its processes emit: logs through the log
+driver into one log group per process with retention set; metrics and
+traces through a non-essential collector beside each task that adds
+only the service and the environment as dimensions.
 
 **Source.** Deployment, Cloud: AWS.
 
 **Look for.** `deployment/terraform/environments/*`: the set of modules
-each environment instantiates and the variables it passes; resources
-that exist in one environment and not another; the deploy workflow's
-production job, how it obtains its images, and whether an approval
-step guards it.
+each environment instantiates and the variables it passes, the base
+domain among them; resources that exist in one environment and not
+another; a bucket and a distribution for each browser app under
+`apps/`, the bucket's public-access block and read policy; the
+`api.`, `app.`, and `admin.` records; the deploy workflow's production
+job, how it obtains its images and bundles, the `config.json` each
+environment writes, and whether an approval step guards it; the log
+configuration and the collector container in each task definition.
 
 **Violation.** A module, resource, or wiring present only in
 production; environment-specific branches in module code instead of
-variables; a production job that runs a build; a production task
-definition pinned to a tag rather than a digest; a promotion path with
-no approval gate.
+variables; a hostname hard-coded in a module instead of derived from
+the base domain; a browser app with no bucket and distribution in some
+environment; a public bucket or website endpoint; a bundle served from
+a container; a production job that builds an image or a bundle; a
+production task definition pinned to a tag rather than a digest; an
+API origin or DSN compiled into a bundle; a promotion path with no
+approval gate; a log group with no retention; `/metrics` or spans
+emitted in an environment where no collector reads them; a collector
+marked essential; a task identifier copied into metric dimensions.
 
 **Severity.** medium
 
@@ -90,19 +107,35 @@ others.
 through one compose stack, using cloud images or wire-compatible
 stand-ins. Application processes run on the host, started by one
 script; a second compose file runs the application containers when the
-real images are needed. Developer dashboards are an optional profile
-nothing in CI depends on.
+real images are needed. Developer dashboards (pgweb for Postgres,
+Valkey Admin for the cache, the consoles the local images ship, Jaeger
+for traces, GlitchTip for errors, the metrics view) live in an optional `devx` profile that
+nothing in CI starts, on host ports read from `.env`. The repository's
+`README.md` lists the local URL of each dashboard, of each service's
+API docs, and of each browser app. `make seed` runs `bootstrap` with a
+development org and owner from `.env` (an `.example` address and a
+development password), changes nothing when run again, and the
+`README.md` lists it with the seeded sign-in.
 
 **Source.** Deployment, Local: Docker Compose.
 
 **Look for.** `deployment/local/docker-compose.yml` and its full
-variant; the start script; the profile that holds dashboards; CI jobs
-that reference compose services.
+variant; the start script; the `devx` profile and the dashboards it
+holds; the local URLs in `README.md`; the `up`, `down`, `reset`, and
+`urls` targets; the `seed` target, the seed
+settings in `.env.example`, and the seeded sign-in in `README.md`; CI
+jobs that reference compose services.
 
 **Violation.** A dependency the application needs that the compose
 stack does not run; application services baked into the default
 compose file so a code change needs an image rebuild; a CI job that
-depends on a dashboard container.
+depends on a dashboard container; a dashboard in the default profile;
+a backing service with no dashboard in `devx`; a dashboard port fixed
+in the compose file; a dashboard, a service's API docs, or a browser
+app whose local URL the `README.md` does not list; no `seed` target,
+so a developer creates the first org and user by hand; a seed that
+fails or duplicates on a second run; a seed owner on a routable domain;
+seeded credentials the `README.md` does not show.
 
 **Severity.** medium
 
@@ -143,11 +176,13 @@ every backend it chose.
 
 **Look for.** Boot code and settings validation: checks pairing the
 environment name with the secrets backend, twin selection with the
-origin, a worker's registration with its expected tenant; the start-up
-inventory log line.
+origin, a worker's registration with its expected tenant, the
+development seed with a local database; the start-up inventory log
+line.
 
 **Violation.** A production-named environment that can start on the
-file secrets backend; a twin selectable off a loopback origin; a boot
+file secrets backend; a twin selectable off a loopback origin; a
+development seed that runs against a non-local database; a boot
 with no line saying which backends are in use; a runbook that carries
 a check the process could make itself.
 
@@ -424,8 +459,10 @@ is configured only when an endpoint is set, otherwise the no-op tracer
 runs. Metrics are exposed on `/metrics` in Prometheus format through
 the client library directly: every request counts once with its route
 template and status, and every queue, cache, and rate limit has a
-counter with an outcome label. Observability is the one capability
-used through its vendor API rather than a platform interface.
+counter with an outcome label; label values are bounded, never an id.
+Every process serves `/metrics`, a worker on a small port of its own.
+Observability is the one capability used through its vendor API
+rather than a platform interface.
 
 **Source.** Cross-Cutting Conventions, Traces and Metrics;
 Infrastructure, Infrastructure Principles.
@@ -433,13 +470,15 @@ Infrastructure, Infrastructure Principles.
 **Look for.** Tracing and metrics setup; a platform module that
 re-exposes spans, counters, or histograms under its own names; code
 paths that branch on whether tracing is configured; the counters
-declared next to each queue, cache, and rate limit.
+declared next to each queue, cache, and rate limit; the labels each
+metric takes; each worker's metrics port.
 
 **Violation.** A `PlatformTracer` or `MetricsInterface` wrapper; a
 second metrics system; code that skips instrumentation when no
 exporter is set instead of relying on the no-op tracer; a request
 counter missing the route template or status label; a queue, cache,
-or rate limit with no outcome counter.
+or rate limit with no outcome counter; an id as a label value; a
+worker that records metrics nothing can read.
 
 **Severity.** low
 
@@ -448,6 +487,9 @@ or rate limit with no outcome counter.
 **Principle.** Configuration is read once at boot into one settings
 object from environment variables under one product prefix, with an
 optional `.env` and a committed `.env.example` documenting every knob.
+A browser app reads its settings once at start from the `config.json`
+deployed next to its bundle; nothing that differs between environments
+is compiled into it.
 Backends are selected there and nowhere else. Managers and service
 impls receive handles and options through constructors.
 
@@ -458,7 +500,8 @@ coverage; `os.environ` or `getenv` reads outside the settings and boot
 modules.
 
 **Violation.** An environment read inside a manager, storage, or
-router; a knob missing from `.env.example`; a second prefix; backend
+router; a build-time variable in a browser app carrying a value that
+differs between environments; a knob missing from `.env.example`; a second prefix; backend
 selection performed outside the settings and boot path.
 
 **Severity.** high
@@ -544,5 +587,53 @@ the record lists (queue claim, atomic increment, at-least-once bus).
 it; an ADR that swaps a technology and silently drops a rule it cannot
 satisfy; a substitution recorded as a deviation or a deviation recorded
 as a substitution.
+
+**Severity.** medium
+
+## DEL-26 Dependencies run on their latest stable or LTS release
+
+**Principle.** Every dependency runs on its latest stable release: the
+current active LTS line where the technology publishes one, the newest
+stable release its maintainers recommend otherwise. Pre-releases,
+release candidates, and lines past their end of life are not used.
+
+**Source.** Technology Choices and How to Override Them, Versions.
+
+**Look for.** `.python-version` and `requires-python`, `.nvmrc`, the
+`packageManager` field of `package.json`, Dockerfile base images,
+image tags in the local compose files, runtime steps in CI workflows,
+engine versions in Terraform, and the lock files.
+
+**Violation.** A runtime, tool, or service on an older release line
+than the current stable or LTS one; a Node line outside active LTS; an
+image tag or engine version past its end of life; a pre-release or
+release candidate.
+
+**Severity.** low
+
+## DEL-27 Every process reports errors, off until a DSN is set
+
+**Principle.** Errors are reported through the Sentry SDK, used
+directly, initialized at boot in every web service, worker, and
+browser app. Unhandled exceptions and `ERROR` log records become
+events tagged with the service, the release, and the request id.
+Reporting is off until a DSN is set, an empty value or `off` means
+unset, and a missing tracker never stops a boot. A browser app reports
+from each route's error element and from the React root's error
+callbacks. Locally the `devx` profile runs GlitchTip seeded with a
+fixed project key.
+
+**Source.** Cross-Cutting Conventions, Error Tracking.
+
+**Look for.** SDK initialization in each process's boot path; the tags
+set on events; how the DSN setting is read and what an empty or `off`
+value does; the browser app's route definitions and root; the local
+tracker in the compose file and its seeding.
+
+**Violation.** A worker or browser app with no error reporting; a boot
+that fails when the DSN is unset or the tracker is unreachable; events
+without the release or the request id; a browser app that reports only
+from one top-level boundary; a local tracker whose project key must be
+created by hand.
 
 **Severity.** medium

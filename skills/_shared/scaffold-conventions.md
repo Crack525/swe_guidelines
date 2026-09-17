@@ -84,6 +84,10 @@ the order the guideline presents them, never by number.
 - A workspace member that depends on another declares it under
   `[tool.uv.sources] <root>-om = { workspace = true }` and is listed in
   the root's `[tool.uv.workspace] members`.
+- A runtime, tool, image, or library a scaffold adds is at its latest
+  stable release, the current active LTS line where one exists, as
+  Technology Choices and How to Override Them (Versions) states. A
+  version the scaffold cannot confirm is named in its output.
 - No em-dashes, no placeholder files (a module exists when it has
   content), no `TODO` left behind, no dead imports.
 
