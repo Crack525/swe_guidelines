@@ -6,6 +6,8 @@ which number.
 
 ## Unreleased
 
+## 0.2.0 (2026-09-17)
+
 ### Added
 
 - `architecture.md`: the Software Design and Architecture Guidelines.
