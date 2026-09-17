@@ -56,7 +56,7 @@ Skeleton:
 | `deployment/local/docker-compose.yml`             | Postgres, Valkey as the cache, a queue, an object store, each image tagged at its latest stable release; host ports read from `.env` with non-default values, so a second project on the same machine does not collide; a `devx` profile with pgweb, Valkey Admin, the object store's and the queue's consoles where their local images ship one, Jaeger for traces, GlitchTip for errors (seeded with a fixed project key so the local DSN in `.env.example` works without its UI), and the metrics view, on ports from `.env` too |
 | `deployment/local/docker-compose.full.yml`        | the same plus the application containers                                                  |
 | `deployment/docker/entrypoint.sh`                 | the shared image entrypoint                                                               |
-| `deployment/terraform/modules/`, `deployment/terraform/environments/{dev,production}/` | one module per resource the settings name (database, cache, queue, buckets, secrets, service with rollout limits so a worker never exceeds its desired count, a log group with retention, and a non-essential OpenTelemetry collector beside each task that adds only service and environment as dimensions; the load balancer answers `/metrics` with a 404), wired in both environments; environment names match the settings' cloud-environment set |
+| `deployment/terraform/modules/`, `deployment/terraform/environments/{dev,production}/` | one module per resource the settings name (database, cache, queue, buckets, secrets, service with rollout limits so a worker never exceeds its desired count, a log group with retention, and a non-essential OpenTelemetry collector beside each task that adds only service and environment as dimensions; the load balancer answers `/metrics` with a 404, served at `api.<base_domain>` with its certificate and DNS record), wired in both environments, each passing its `base_domain` (production the product's domain, `dev` a `dev.` subdomain of it) and the API's allowed origins as variables; environment names match the settings' cloud-environment set |
 | `scripts/dev.sh`                                  | starts every application process on the host                                              |
 
 OM distribution, under `om/`:
@@ -110,7 +110,9 @@ Nothing; the tree is new. Every later step appends to the files above.
    the maintenance sweep, ready for real kinds.
 4. Unless `--no-portal`, read
    `${CLAUDE_SKILL_DIR}/../arch-scaffold-app/SKILL.md` and follow it
-   with `portal --kind portal`.
+   with `portal --kind portal`, including its Terraform and deploy
+   rows: the portal's bucket and distribution exist in every
+   environment before this step is done.
 5. With `--first`, read
    `${CLAUDE_SKILL_DIR}/../arch-scaffold-namespace/SKILL.md` and follow
    it with `<namespace> <Entity> <field:type ...>`.

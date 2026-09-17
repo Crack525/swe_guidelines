@@ -39,35 +39,45 @@ service holding a rule a second app later copies.
 
 **Severity.** high
 
-## DEL-02 One cloud, environments that differ by variables, promotion by digest
+## DEL-02 One cloud, environments that differ by variables, promotion without a rebuild
 
-**Principle.** Cloud deployments target AWS. Every environment has the
-same module graph; everything that differs between two environments is
-a variable, so the smaller environment predicts production with
-nothing more than scale changes. Production does not rebuild: it
-promotes the images the smaller environment already ran, by digest,
-behind an approval gate. Every environment collects what its processes
-emit: logs through the log driver into one log group per process with
-retention set; metrics and traces through a non-essential collector
-beside each task that adds only the service and the environment as
-dimensions.
+**Principle.** Cloud deployments target AWS. Services and workers run
+on the container runtime; each browser app ships from a private S3
+bucket served through CloudFront. Every environment has the same
+module graph; everything that differs between two environments is a
+variable, the base domain included, under which `api.` is the gateway,
+`app.` the portal, and `admin.` the operator console. Production does
+not rebuild: it promotes images by digest and browser bundles by build
+id, behind an approval gate, and a bundle reads what differs between
+environments from a `config.json` deployed next to it. Every
+environment collects what its processes emit: logs through the log
+driver into one log group per process with retention set; metrics and
+traces through a non-essential collector beside each task that adds
+only the service and the environment as dimensions.
 
 **Source.** Deployment, Cloud: AWS.
 
 **Look for.** `deployment/terraform/environments/*`: the set of modules
-each environment instantiates and the variables it passes; resources
-that exist in one environment and not another; the deploy workflow's
-production job, how it obtains its images, and whether an approval
-step guards it; the log configuration and the collector container in
-each task definition.
+each environment instantiates and the variables it passes, the base
+domain among them; resources that exist in one environment and not
+another; a bucket and a distribution for each browser app under
+`apps/`, the bucket's public-access block and read policy; the
+`api.`, `app.`, and `admin.` records; the deploy workflow's production
+job, how it obtains its images and bundles, the `config.json` each
+environment writes, and whether an approval step guards it; the log
+configuration and the collector container in each task definition.
 
 **Violation.** A module, resource, or wiring present only in
-production; a log group with no retention; `/metrics` or spans emitted
-in an environment where no collector reads them; a collector marked
-essential; a task identifier copied into metric dimensions; environment-specific branches in module code instead of
-variables; a production job that runs a build; a production task
-definition pinned to a tag rather than a digest; a promotion path with
-no approval gate.
+production; environment-specific branches in module code instead of
+variables; a hostname hard-coded in a module instead of derived from
+the base domain; a browser app with no bucket and distribution in some
+environment; a public bucket or website endpoint; a bundle served from
+a container; a production job that builds an image or a bundle; a
+production task definition pinned to a tag rather than a digest; an
+API origin or DSN compiled into a bundle; a promotion path with no
+approval gate; a log group with no retention; `/metrics` or spans
+emitted in an environment where no collector reads them; a collector
+marked essential; a task identifier copied into metric dimensions.
 
 **Severity.** medium
 
@@ -477,6 +487,9 @@ worker that records metrics nothing can read.
 **Principle.** Configuration is read once at boot into one settings
 object from environment variables under one product prefix, with an
 optional `.env` and a committed `.env.example` documenting every knob.
+A browser app reads its settings once at start from the `config.json`
+deployed next to its bundle; nothing that differs between environments
+is compiled into it.
 Backends are selected there and nowhere else. Managers and service
 impls receive handles and options through constructors.
 
@@ -487,7 +500,8 @@ coverage; `os.environ` or `getenv` reads outside the settings and boot
 modules.
 
 **Violation.** An environment read inside a manager, storage, or
-router; a knob missing from `.env.example`; a second prefix; backend
+router; a build-time variable in a browser app carrying a value that
+differs between environments; a knob missing from `.env.example`; a second prefix; backend
 selection performed outside the settings and boot path.
 
 **Severity.** high

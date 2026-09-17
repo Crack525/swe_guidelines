@@ -1453,6 +1453,9 @@ The gateway owns a short list of edge concerns, each done once:
     short-lived ticket minted by an authenticated request, never with a
     long-lived credential in a URL. Redeeming the ticket re-checks the
     credential behind it.
+-   **Origins.** Cross-origin requests are accepted only from the
+    browser apps' origins, a list read from settings; every other
+    origin is refused.
 -   **Request id.** The gateway accepts an inbound `x-request-id` or
     mints one, stamps it on the context, echoes it in the response
     header, and attaches it to the log context and the trace span.
@@ -2077,8 +2080,37 @@ container runtime. Every environment has the same module graph, and
 everything that differs between two environments is a variable, so a
 service that runs in the smaller environment runs in production with
 nothing more than scale changes. Production does not rebuild: it
-promotes the images the smaller environment already ran, by digest,
-behind an approval gate.
+promotes what the smaller environment already ran, behind an approval
+gate: service and worker images by digest, browser bundles by build
+id.
+
+A browser app is a static bundle (see [Client
+Rendering](#client-rendering)), and it ships from a private S3 bucket
+served through CloudFront, one bucket and one distribution per app per
+environment. The bucket blocks public access and only its distribution
+reads it. Both are declared in Terraform next to the services, so an
+environment that serves the API serves its browser apps too. The
+distribution serves files only; every call the app makes to the
+platform still goes through [the gateway](#the-gateway).
+
+The bundle is built once. What differs between environments (the API
+origin, the error-tracking DSN, the environment name) is read at start
+from a `config.json` that each environment's deploy writes next to the
+bundle, so production receives the files the smaller environment
+already served.
+
+Every environment has one base domain, a variable like any other.
+Production's base domain is the product's own domain, `<domain>`; a
+smaller environment's is a subdomain of it, such as `dev.<domain>`.
+Under the base domain, `api.` is the gateway, sockets included, `app.`
+is the portal, and `admin.` is the operator console, so each browser
+app is its own origin and the API is another. In production the bare
+`<domain>` is the company website, which is not part of the platform.
+
+> **Principle:** Services and workers run on the container runtime.
+> Browser apps ship from a private S3 bucket through CloudFront, built
+> once and promoted. `api.`, `app.`, and `admin.` sit under each
+> environment's base domain.
 
 Every environment collects what its processes emit; an endpoint
 nothing reads is not observability. Logs leave through the container
@@ -2358,13 +2390,15 @@ infrastructure jobs.
 ### Stack
 
 The client stack is React + TypeScript on Vite. The portal builds to a
-static SPA served behind the gateway; the operator console is a second
-application on the same stack; the CLI is Python and lives outside this
-stack. Vite builds a static bundle and nothing else, which keeps the
-[Apps Are Dumb](#apps-are-dumb) rule enforced by construction: there is
-no place in the app to put backend logic. Vite is chosen over a
-server-rendering framework because [Client Rendering](#client-rendering)
-rules server-side rendering out, so the simpler tool wins.
+static SPA whose files are served through CloudFront (see [Cloud:
+AWS](#cloud-aws)) and whose calls to the platform are served behind [the
+gateway](#the-gateway); the operator console is a second application on
+the same stack; the CLI is Python and lives outside this stack. Vite
+builds a static bundle and nothing else, which keeps the [Apps Are
+Dumb](#apps-are-dumb) rule enforced by construction: there is no place
+in the app to put backend logic. Vite is chosen over a server-rendering
+framework because [Client Rendering](#client-rendering) rules
+server-side rendering out, so the simpler tool wins.
 
 > **Principle:** One React + TypeScript stack for every browser app.
 > The CLI stays Python.
@@ -2434,9 +2468,10 @@ never into components.
 
 ### The Operator Console
 
-The operator console is a separate application that shares the
-portal's stack, design tokens, component kit, sign-in flow, and API
-client, and never its security context. It has its own origin, its own
+The operator console is a separate application that shares the portal's
+stack, design tokens, component kit, sign-in flow, and API client, and
+never its security context. It has its own origin (`admin.` under the
+environment's base domain, see [Cloud: AWS](#cloud-aws)), its own
 bundle, and its own routes under `/v1/admin/*`. It holds no realtime
 socket. Its authority comes from the operator allowlist and the
 credential-provenance check of [The Gateway](#the-gateway), not from a
@@ -2580,6 +2615,11 @@ which identity provider, real or twin. A manager or a service impl
 receives the resulting handles and options through its constructor
 and never reads an environment variable itself.
 
+A browser app reads its settings the same way, once at start, from
+the `config.json` deployed next to its bundle (see [Cloud:
+AWS](#cloud-aws)). Nothing that differs between environments is
+compiled into the bundle.
+
 Runtime variation that belongs to the product (which tenant may do
 what, which plan allows which limit) is a modelled entity with a
 manager and a storage. A feature flag, on the rare day one is needed,
@@ -2623,9 +2663,9 @@ Python on Pydantic; storage is SQLAlchemy and Alembic over Postgres;
 infrastructure impls target Valkey as the cache, an S3-like object
 store, and a hosted queue; browser apps are React and TypeScript on
 Vite with TanStack Query and Zustand; workspaces are uv and pnpm; the
-local stack is Docker Compose; the cloud is AWS, declared in Terraform;
-traces are OpenTelemetry, metrics are Prometheus, and errors go
-through the Sentry SDK.
+local stack is Docker Compose; the cloud is AWS, declared in Terraform,
+with browser apps on S3 and CloudFront; traces are OpenTelemetry,
+metrics are Prometheus, and errors go through the Sentry SDK.
 
 The names are a choice, and a practical one. Python carries most
 backend work and TypeScript most front-end work, so both stacks have

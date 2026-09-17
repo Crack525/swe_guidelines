@@ -23,6 +23,22 @@ which number.
   `arch-scaffold-worker`, and `arch-scaffold-app` wire error reporting,
   the worker metrics port, and the collector; `README.md` lens count.
   Minor.
+- `architecture.md`: "Cloud: AWS" ships each browser app from a private
+  S3 bucket served through CloudFront, declared in Terraform in every
+  environment, while the app's calls to the platform stay behind the
+  gateway; production promotes browser bundles by build id as it
+  promotes images by digest, each bundle reading a `config.json` its
+  environment writes; every environment has a base domain with `api.`,
+  `app.`, and `admin.` under it; "Stack" separates serving files from
+  serving the platform; "The Gateway" accepts cross-origin requests
+  only from the browser apps' origins; "Configuration" and "The
+  Operator Console" follow; "Technology Choices and How to Override
+  Them" names the hosting; lenses `DEL-02`, `DEL-21`, and `NET-06`
+  sharpened; `arch-scaffold-app` creates the `static-site` module, the
+  config loader, and a build-once deploy, and refuses to finish without
+  them; `arch-scaffold-service` adds the allowed origins;
+  `arch-scaffold-new` wires the base domain and `api.` and requires the
+  portal's deployment. Minor.
 
 ### Changed
 

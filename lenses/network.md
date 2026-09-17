@@ -120,8 +120,9 @@ from storage after a reconnect.
 ## NET-06 The gateway is the only public surface
 
 **Principle.** The gateway authenticates requests, builds the context,
-and routes; services never parse raw headers or tokens. It accepts an
-inbound `x-request-id` or mints one, stamps it on the context, echoes
+and routes; services never parse raw headers or tokens. It accepts
+cross-origin requests only from the browser apps' origins, read from
+settings. It accepts an inbound `x-request-id` or mints one, stamps it on the context, echoes
 it in the response header, and attaches it to the log context and the
 trace span.
 
@@ -130,11 +131,11 @@ trace span.
 **Look for.** Where bearer tokens and headers are parsed; whether any
 router, service impl, or manager reads `Authorization` or an app
 header itself; whether a second path to the internet bypasses the
-gateway; the request-id middleware and what it writes to the response
+gateway; the allowed-origins setting; the request-id middleware and what it writes to the response
 and the span.
 
 **Violation.** A router that inspects headers to decide who is calling;
-an endpoint reachable without passing the gateway's dependencies; a
+a wildcard or hard-coded allowed origin; an endpoint reachable without passing the gateway's dependencies; a
 response without the `x-request-id` header; a span without the request
 id.
 
