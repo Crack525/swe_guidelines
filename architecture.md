@@ -2298,9 +2298,10 @@ Workspace tooling lives at the repo root: a single `pyproject.toml`
 declares the uv workspace members, a single `package.json` plus
 `pnpm-workspace.yaml` declares the TypeScript members, and lint,
 format, and type-check config sit next to them. `.python-version` and
-`.nvmrc` pin the runtimes at the releases [Versions](#versions) sets. `make check` is the
-fast local gate (lint, format, types, unit tests) and CI runs it plus
-the integration, migration, image, and infrastructure jobs.
+`.nvmrc` pin the runtimes at the releases [Versions](#versions) sets.
+`make check` is the fast local gate (lint, format, types, unit tests)
+and CI runs it plus the integration, migration, image, and
+infrastructure jobs.
 
 > **Python tip:** a top-level package named `platform` shadows the
 > standard-library module of the same name. Pick a product-specific

@@ -56,6 +56,12 @@ which number.
 
 ### Changed
 
+- Scaffolded CI runs every gate the guideline's "Layout Conventions"
+  and "Migrations" name: `arch-scaffold-new` writes `lint`,
+  `format-check`, `typecheck`, and `migrate-roundtrip` targets, states
+  that `check` runs lint, format, types, and unit tests, and adds the
+  round trip to the integration job; `arch-scaffold-app` adds the
+  browser app's lint, typecheck, and test scripts to `check`. Patch.
 - Scaffold skills sharpened from their first end-to-end run and the
   full review of what they produced: `arch-scaffold-new` accepts a
   fresh repository as its target, writes `specs/architecture.md`, the

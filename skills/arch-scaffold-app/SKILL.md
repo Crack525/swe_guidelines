@@ -71,7 +71,7 @@ CLI, under `apps/<app-name>/`:
 |-----------------------------------------|--------------------------------------------------------------------------|
 | `pnpm-workspace.yaml` (browser app)     | `apps/*` and `clients/*` listed                                           |
 | `package.json` (root, browser app)      | the workspace scripts for lint, typecheck, and test                       |
-| `Makefile`                              | the `openapi` target writes `clients/api-client/openapi.json` and runs `generate` |
+| `Makefile`                              | the `openapi` target writes `clients/api-client/openapi.json` and runs `generate`; for a browser app, `check` also runs the workspace lint, typecheck, and test scripts, so CI's `make check` covers the app |
 | `deployment/realtime-timeouts.json` (portal, when absent) | the ping interval and load balancer idle timeout, asserted by a client test and a service test |
 | `pyproject.toml` (root, CLI)            | the member added to `[tool.uv.workspace] members`                         |
 | `scripts/dev.sh`                        | starts the browser app's dev server                                       |
