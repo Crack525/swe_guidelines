@@ -21,6 +21,19 @@ which number.
   "Local: Docker Compose" name Valkey as the cache; the `devx` profile
   browses it with Valkey Admin; `arch-scaffold-new` runs the Valkey
   image locally and depends on the `valkey-glide` client. Minor.
+- `architecture.md`: "Local: Docker Compose" adds `make seed`, which
+  bootstraps a development org and owner from `.env` (an `.example`
+  address and a development password), changes nothing on a second
+  run, and is listed with the seeded sign-in in `README.md`; "What a
+  Process Refuses" refuses the seed against a non-local database;
+  lenses `DEL-04` and `DEL-06` sharpened; `arch-scaffold-new` writes
+  the target, the seed settings, and the README quick start and runs
+  the seed twice; `arch-scaffold-service` adds `bootstrap --seed`.
+  Minor.
+- `architecture.md`: "Local: Docker Compose" adds the `make up`,
+  `make down`, `make reset`, and `make urls` shortcuts; lens `DEL-04`
+  looks for them; `arch-scaffold-new` writes them and leads the README
+  quick start with `make up`. Minor.
 
 ## 0.2.0 (2026-09-17)
 

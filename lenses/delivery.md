@@ -95,14 +95,19 @@ Valkey Admin for the cache, the consoles the local images ship, Jaeger
 for traces, the metrics view) live in an optional `devx` profile that
 nothing in CI starts, on host ports read from `.env`. The repository's
 `README.md` lists the local URL of each dashboard, of each service's
-API docs, and of each browser app.
+API docs, and of each browser app. `make seed` runs `bootstrap` with a
+development org and owner from `.env` (an `.example` address and a
+development password), changes nothing when run again, and the
+`README.md` lists it with the seeded sign-in.
 
 **Source.** Deployment, Local: Docker Compose.
 
 **Look for.** `deployment/local/docker-compose.yml` and its full
 variant; the start script; the `devx` profile and the dashboards it
-holds; the local URLs in `README.md`; CI jobs that reference compose
-services.
+holds; the local URLs in `README.md`; the `up`, `down`, `reset`, and
+`urls` targets; the `seed` target, the seed
+settings in `.env.example`, and the seeded sign-in in `README.md`; CI
+jobs that reference compose services.
 
 **Violation.** A dependency the application needs that the compose
 stack does not run; application services baked into the default
@@ -110,7 +115,10 @@ compose file so a code change needs an image rebuild; a CI job that
 depends on a dashboard container; a dashboard in the default profile;
 a backing service with no dashboard in `devx`; a dashboard port fixed
 in the compose file; a dashboard, a service's API docs, or a browser
-app whose local URL the `README.md` does not list.
+app whose local URL the `README.md` does not list; no `seed` target,
+so a developer creates the first org and user by hand; a seed that
+fails or duplicates on a second run; a seed owner on a routable domain;
+seeded credentials the `README.md` does not show.
 
 **Severity.** medium
 
@@ -151,11 +159,13 @@ every backend it chose.
 
 **Look for.** Boot code and settings validation: checks pairing the
 environment name with the secrets backend, twin selection with the
-origin, a worker's registration with its expected tenant; the start-up
-inventory log line.
+origin, a worker's registration with its expected tenant, the
+development seed with a local database; the start-up inventory log
+line.
 
 **Violation.** A production-named environment that can start on the
-file secrets backend; a twin selectable off a loopback origin; a boot
+file secrets backend; a twin selectable off a loopback origin; a
+development seed that runs against a non-local database; a boot
 with no line saying which backends are in use; a runbook that carries
 a check the process could make itself.
 

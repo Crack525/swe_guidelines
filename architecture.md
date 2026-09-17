@@ -2091,11 +2091,11 @@ every environment are part of CI.
 
 Local development and tests run entirely on the developer's machine.
 Every technology piece the platform depends on (Postgres, Valkey as
-the cache, the object store, the queue) runs as a local container through a single
-`docker-compose` stack, using the cloud's images where possible or a
-wire-compatible stand-in where not, each at the version
-[Versions](#versions) sets. Application processes run on the
-host, started by one script, so a code change is a restart and a
+the cache, the object store, the queue) runs as a local container
+through a single `docker-compose` stack, using the cloud's images where
+possible or a wire-compatible stand-in where not, each at the version
+[Versions](#versions) sets. Application processes run on the host,
+started by one script, so a code change is a restart and a
 debugger attaches without ceremony; a second compose file runs the
 application containers too.
 
@@ -2112,6 +2112,23 @@ each dashboard, the interactive API docs of each service, and each
 browser app. A developer inspecting data, trying an operation, or
 debugging a flow reaches the right page without reading the compose
 file or the start script.
+
+A freshly migrated local database is seeded with one command,
+`make seed`, which runs the service's `bootstrap` subcommand (see
+[Layout Conventions](#layout-conventions)) with a development org and
+its owner read from `.env`: an owner address on the reserved `.example`
+domain, such as `owner@acme.example`, and a development password, such
+as `pswd_1234`. Running it again changes nothing. The `README.md`
+lists the command and the seeded sign-in next to the local URLs, so a
+developer goes from a clone to a signed-in session without creating an
+account by hand.
+
+Four shortcuts cover the whole stack. `make up` starts everything in
+containers, the application and the `devx` profile included, migrates,
+seeds, and prints the local URLs; `make down` stops it all and keeps
+the data for the next `make up`; `make reset` wipes every local
+container and volume and runs `make up` again; `make urls` prints the
+local URLs, read from the same `.env` as the ports.
 
 > **Principle:** Every dependency runs in a local container. The
 > application runs on the host.
@@ -2137,7 +2154,8 @@ the real service, and that list stays short.
 Settings that are only safe locally are refused by the process, not by
 a checklist: a production-named environment on the file secrets
 backend, a twin selected off a loopback origin, a worker registered
-under the wrong tenant. Each refusal is a one-line check at boot that
+under the wrong tenant, the development seed against a database that
+is not local. Each refusal is a one-line check at boot that
 exits naming the setting. A boot that succeeds logs one line naming
 every backend it chose.
 

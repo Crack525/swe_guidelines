@@ -1,7 +1,7 @@
 ---
 name: arch-scaffold-new
 description: "Bootstrap a whole new system in the shape the Software Design and Architecture Guidelines prescribe, into an empty target directory, by building the monorepo skeleton (uv workspace, om, infra, the first API process, a worker, a portal, deployment folders, Makefile, CI) and then following the other scaffold skills for the first namespace and entity. Stack: TypeScript (React, Vite) or Python."
-allowed-tools: Read, Grep, Glob, Write, Edit, Bash(make setup), Bash(make check), Bash(make test-unit), Bash(make infra-up), Bash(make migrate), Bash(make test-integration), Bash(make openapi), Bash(uv init:*), Bash(uv sync:*), Bash(uv add:*), Bash(uv run:*), Bash(pnpm install:*), Bash(pnpm run:*), Bash(git init:*), Bash(git status:*), Bash(git diff:*), Bash(git rev-parse:*)
+allowed-tools: Read, Grep, Glob, Write, Edit, Bash(make setup), Bash(make check), Bash(make test-unit), Bash(make infra-up), Bash(make migrate), Bash(make seed), Bash(make test-integration), Bash(make openapi), Bash(uv init:*), Bash(uv sync:*), Bash(uv add:*), Bash(uv run:*), Bash(pnpm install:*), Bash(pnpm run:*), Bash(git init:*), Bash(git status:*), Bash(git diff:*), Bash(git rev-parse:*)
 ---
 
 # arch-scaffold-new
@@ -44,9 +44,9 @@ Skeleton:
 | `pyproject.toml`                                  | `[tool.uv] package = false`, `[tool.uv.workspace] members` (with a comment citing the root-package ADR by number), `[tool.uv.sources]`, pytest markers `integration`, `e2e`, `slow` |
 | `ruff.toml`, `pyrightconfig.json`, `.python-version` | shared Python lint, format, and type config; `.python-version` and `requires-python` name the latest stable Python release |
 | `package.json`, `pnpm-workspace.yaml`, `.nvmrc`, `tsconfig.base.json`, `eslint.config.js` (unless `--no-portal`) | the pnpm workspace over `apps/*` and `clients/*`, and the TypeScript and lint config every member extends; `.nvmrc` names the current active Node LTS release and `packageManager` the latest stable pnpm |
-| `.gitignore`, `.env.example`                      | ignores; every setting knob documented with its prefix, the `devx` dashboard ports included |
-| `Makefile`                                        | `setup`, `infra-up`, `infra-down`, `migrate` (every role, `--all`), `migrate-check` (ORM metadata against the migrated schema, per role), `migrate-roundtrip` (downgrade the latest revision of every role, then upgrade it), `lint` (`ruff check`), `format-check` (`ruff format --check`), `typecheck` (`pyright`), `check` (`lint`, `format-check`, `typecheck`, `test-unit`), `test-unit`, `test-integration`, `openapi`, `devx-up` (the stack plus the `devx` profile; `infra-down` stops both), self-documented |
-| `README.md`                                       | how to set up, run, and check, and a `Local URLs` table (`http://localhost:<port>`, the port from `.env.example`) listing every `devx` dashboard; the service and app scaffolds of steps 2 and 4 add their rows |
+| `.gitignore`, `.env.example`                      | ignores; every setting knob documented with its prefix, the `devx` dashboard ports included, and the development seed (`SEED_ORG_NAME`, `SEED_ORG_SLUG`, `SEED_OWNER_EMAIL=owner@<root-package>.example`, `SEED_OWNER_PASSWORD=pswd_1234`, each under the product prefix) |
+| `Makefile`                                        | `setup`, `infra-up`, `infra-down`, `migrate` (every role, `--all`), `migrate-check` (ORM metadata against the migrated schema, per role), `migrate-roundtrip` (downgrade the latest revision of every role, then upgrade it), `lint` (`ruff check`), `format-check` (`ruff format --check`), `typecheck` (`pyright`), `check` (`lint`, `format-check`, `typecheck`, `test-unit`), `test-unit`, `test-integration`, `openapi`, `devx-up` (the stack plus the `devx` profile; `infra-down` stops both), `seed` (the API process's `bootstrap --seed`), `up` (both compose files and the `devx` profile, then `migrate`, `seed`, `urls`), `down` (stops every container, keeps the volumes), `reset` (`down` with the volumes removed, then `up`), `urls` (prints every local URL from `.env`), self-documented |
+| `README.md`                                       | how to set up, run, and check, a quick start (`make up`, with `make down`, `make reset`, and `make urls` beside it; for editing code on the host, `make setup`, `make infra-up`, `make migrate`, `make seed`, `scripts/dev.sh`) followed by the seeded sign-in (org, owner email, password, all development-only), and a `Local URLs` table (`http://localhost:<port>`, the port from `.env.example`) listing every `devx` dashboard; the service and app scaffolds of steps 2 and 4 add their rows |
 | `docs/architecture.md`                            | a one-page "as built" stub linking to the guideline                                       |
 | `specs/architecture.md`                           | the pointer to the guideline pinned at a tag or commit, with empty `Substitutions` and `Deviations` tables, as the guideline's adopting guide (`docs/adopting.md` next to it) shows |
 | `docs/adr/0001-root-package.md`                   | the root package decision                                                                 |
@@ -115,7 +115,8 @@ Nothing; the tree is new. Every later step appends to the files above.
    `${CLAUDE_SKILL_DIR}/../arch-scaffold-namespace/SKILL.md` and follow
    it with `<namespace> <Entity> <field:type ...>`.
 6. `make check`; then, when Docker is available, `make infra-up`,
-   `make migrate`, and `make test-integration`, only against the
+   `make migrate`, `make seed` twice (the second run changes nothing),
+   and `make test-integration`, only against the
    compose stack of step 1: refuse when the effective database URL
    (the environment, `.env`, or the settings default) is not a local
    address.
