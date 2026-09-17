@@ -43,8 +43,8 @@ Browser app (`portal` or `admin`), under `apps/<app-name>/`:
 
 | File                                                     | Holds                                                                     |
 |----------------------------------------------------------|---------------------------------------------------------------------------|
-| `package.json`, `tsconfig.json`, `vite.config.ts`, `eslint.config.js` | the workspace package depending on `@<root>/api-client`, strict TypeScript, the Vite build, `vitest` with a `test` script, and the two lint rules that enforce Procedure 1 (no `fetch`, no import of `schema.d.ts` in feature code) |
-| `src/main.tsx`, `src/app/App.tsx`, `src/app/routes.tsx`  | the shell and the routes                                                  |
+| `package.json`, `tsconfig.json`, `vite.config.ts`, `eslint.config.js` | the workspace package depending on `@<root>/api-client` and `@sentry/react`, strict TypeScript, the Vite build, `vitest` with a `test` script, and the two lint rules that enforce Procedure 1 (no `fetch`, no import of `schema.d.ts` in feature code) |
+| `src/main.tsx`, `src/app/App.tsx`, `src/app/routes.tsx`  | the shell and the routes; the Sentry SDK initialized in `main.tsx` only when the DSN is set, reporting from the React root's error callbacks and from each route's error element |
 | `src/app/RequireAuth.tsx` (portal) or `src/app/RequireAdmin.tsx` (admin) | the sign-in gate; the console renders the API's own refusal |
 | `src/features/sign_in/` (portal)                         | the sign-in screen the gate renders: login, org choice, exchange for a tenant session, in the same split as every screen |
 | `src/design/tokens.ts` and `src/design/kit/` (first browser app only) | design tokens and a minimal component kit; the second app imports the first app's |

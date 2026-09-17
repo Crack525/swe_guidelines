@@ -41,7 +41,7 @@ Under `services/<service-name>/`:
 | `src/<root>/services/<svc>/__init__.py`       | empty                                                                                          |
 | `src/<root>/services/<svc>/settings.py`       | one `BaseSettings` with the product prefix, including `app_type` for `--app`                    |
 | `src/<root>/services/<svc>/container.py`      | `AppContainer.build(settings)` (storage, then infra, then managers), `for_tests(storage, infra)`, `start()`, `close()` |
-| `src/<root>/services/<svc>/app.py`            | `create_app(container=None)`: settings first, then logging, trust store, and tracing (one `boot(settings)` helper every subcommand calls), then the container, then middleware in fixed order (the request-id middleware opens the server span), routers under `/v1`, health routes, lifespan calling `start()` and `close()` |
+| `src/<root>/services/<svc>/app.py`            | `create_app(container=None)`: settings first, then logging, error reporting, trust store, and tracing (one `boot(settings)` helper every subcommand calls), then the container, then middleware in fixed order (the request-id middleware opens the server span), routers under `/v1`, health routes, lifespan calling `start()` and `close()` |
 | `src/<root>/services/<svc>/gateway/__init__.py` | empty                                                                                        |
 | `src/<root>/services/<svc>/gateway/auth.py`   | credential parsing by prefix, `current_context` dependency, `Ctx` alias, the app-header check   |
 | `src/<root>/services/<svc>/gateway/admin.py`  | the operator gate producing `AdminContext` for `/v1/admin/*`, `AdminCtx` alias                  |

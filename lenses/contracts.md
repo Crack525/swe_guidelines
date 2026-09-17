@@ -306,8 +306,8 @@ domain exception on its own.
 
 ## CON-16 Every process boots through the same container in the same order
 
-**Principle.** Settings are read; logging, the trust store, and tracing
-are configured; storage is built, then infra, then the managers, in that
+**Principle.** Settings are read; logging, error reporting, the trust
+store, and tracing are configured; storage is built, then infra, then the managers, in that
 order. The container has `start()` and `close()`, and `close()` unwinds
 in reverse. A test constructs the same container over the in-memory
 storage root and the local infra root.

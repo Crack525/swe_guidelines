@@ -6,6 +6,24 @@ which number.
 
 ## Unreleased
 
+### Added
+
+- `architecture.md`: "Error Tracking", a subsection of "Cross-Cutting
+  Conventions": every web service, worker, and browser app reports
+  errors through the Sentry SDK, tagged with service, release, and
+  request id, off until a DSN is set, the browser app reporting from
+  each route's error element and the React root; "Traces and Metrics"
+  bounds label values and has every process serve `/metrics`, a worker
+  on its own port; "Cloud: AWS" collects logs through the log driver
+  with retention and metrics and traces through a non-essential
+  collector; "The Gateway" answers `/metrics` with a 404 at the load
+  balancer; "Local: Docker Compose" adds GlitchTip to `devx`; lens
+  `DEL-27`; lenses `DEL-02`, `DEL-04`, `DEL-20`, `NET-10`, and `CON-16`
+  sharpened; `arch-scaffold-new`, `arch-scaffold-service`,
+  `arch-scaffold-worker`, and `arch-scaffold-app` wire error reporting,
+  the worker metrics port, and the collector; `README.md` lens count.
+  Minor.
+
 ### Changed
 
 - `architecture.md`: "Local: Docker Compose" names the developer

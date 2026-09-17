@@ -110,6 +110,7 @@ why they are named and how a project substitutes its own.
   - [Exceptions](#exceptions)
   - [Logs](#logs)
   - [Traces and Metrics](#traces-and-metrics)
+  - [Error Tracking](#error-tracking)
   - [Configuration](#configuration)
   - [The App Container](#the-app-container)
   - [Records of Decisions](#records-of-decisions)
@@ -1050,7 +1051,8 @@ the constructor.
     infra handles through their constructors, never through globals,
     thread locals, or `OpContext`.
 -   Observability is the one capability used through its vendor API
-    directly (see [Traces and Metrics](#traces-and-metrics)).
+    directly (see [Traces and Metrics](#traces-and-metrics) and [Error
+    Tracking](#error-tracking)).
 -   Every impl can `describe()` itself in one line, and the container
     logs the chosen backends once at start, so an operator reading a
     boot log knows exactly what a process is talking to.
@@ -1473,6 +1475,8 @@ The gateway owns a short list of edge concerns, each done once:
 -   **Health.** `/healthz` answers liveness with the version and no
     I/O; `/readyz` awaits the storage healthcheck; `/metrics` exposes
     counters and histograms. All three sit outside the versioned API.
+    The load balancer answers `/metrics` with a 404; only the collector
+    beside the process reads it.
 -   **Versioning.** The API prefix (`/v1`) is applied once, where
     routers are mounted. Routers declare only their own sub-paths.
 
@@ -2076,6 +2080,18 @@ nothing more than scale changes. Production does not rebuild: it
 promotes the images the smaller environment already ran, by digest,
 behind an approval gate.
 
+Every environment collects what its processes emit; an endpoint
+nothing reads is not observability. Logs leave through the container
+runtime's log driver into one log group per process, with retention
+set. Metrics and traces leave through an OpenTelemetry collector
+running beside each task: it scrapes `/metrics` and receives spans
+over localhost, forwards both to CloudWatch and X-Ray, and adds only
+the service and the environment as dimensions, because every distinct
+dimension value is billed as its own series. The collector is marked
+non-essential, so its failure never stops the application. Error
+events go straight to the tracker (see [Error
+Tracking](#error-tracking)).
+
 ### Infrastructure as Code
 
 Every cloud resource is defined in Terraform: networks, services,
@@ -2103,9 +2119,9 @@ Developer dashboards live in an optional compose profile named `devx`,
 started only when a developer asks for it and never by CI. The profile
 holds one browser per backing service the stack runs (pgweb for
 Postgres, Valkey Admin for the cache, the console of the object store
-or the queue where its local image ships one, Jaeger for traces) and
-the metrics view, each on a host port read from the same `.env` as the
-rest of the stack.
+or the queue where its local image ships one, Jaeger for traces,
+GlitchTip for errors) and the metrics view, each on a host port read
+from the same `.env` as the rest of the stack.
 
 The repository's `README.md` lists every local URL a developer opens:
 each dashboard, the interactive API docs of each service, and each
@@ -2521,10 +2537,37 @@ Metrics are counters and histograms exposed on `/metrics` in the
 Prometheus exposition format, again through the client library
 directly. Every request counts once with its route template and
 status; every queue, cache, and rate limit has a counter with an
-outcome label.
+outcome label. Label values are bounded: a template, a status, an
+outcome, never an id.
+
+Every process serves `/metrics`, workers included. A worker has no
+API, so it serves the endpoint alone on a small port of its own.
 
 > **Principle:** OpenTelemetry for traces, a Prometheus endpoint for
 > metrics, both used directly. The backend is a config detail.
+
+### Error Tracking
+
+Errors are reported through the Sentry SDK, used directly, to any
+tracker that speaks its protocol. The SDK is initialized at boot in
+every process: each web service, each worker, and each browser app.
+An unhandled exception and an `ERROR` log record each become an event
+tagged with the service, the release, and the request id, so an event
+leads to its log lines and its trace.
+
+Reporting is off until a DSN is set, and an empty value or `off`
+means unset, so a missing tracker never stops a boot. Locally the
+`devx` profile runs GlitchTip seeded with a fixed project key, so the
+DSN in `.env` works without a visit to its UI.
+
+A browser app reports from each route's error element and from the
+React root's error callbacks. The router catches a render error before
+a single top-level boundary sees it, so one boundary alone reports
+nothing.
+
+> **Principle:** Every process reports errors, the browser app
+> included. Reporting turns on when a DSN is set and never blocks a
+> boot.
 
 ### Configuration
 
@@ -2548,10 +2591,10 @@ is a vendor SDK used directly with its client injected at boot.
 ### The App Container
 
 Every process, service or worker, boots the same way. Settings are
-read. Logging, the trust store, and tracing are configured. Storage is
-built, then infra, then the managers, in that order, and handed to
-whatever runs on top: routers resolve them per request from one
-container object; a worker loop holds them directly. The container has
+read. Logging, error reporting, the trust store, and tracing are
+configured. Storage is built, then infra, then the managers, in that
+order, and handed to whatever runs on top: routers resolve them per
+request from one container object; a worker loop holds them directly. The container has
 `start()` and `close()`, called from the process lifespan, and
 `close()` unwinds in reverse order. A test constructs the same
 container over the in-memory storage root and the local infra root and
@@ -2581,7 +2624,8 @@ infrastructure impls target Valkey as the cache, an S3-like object
 store, and a hosted queue; browser apps are React and TypeScript on
 Vite with TanStack Query and Zustand; workspaces are uv and pnpm; the
 local stack is Docker Compose; the cloud is AWS, declared in Terraform;
-traces are OpenTelemetry and metrics are Prometheus.
+traces are OpenTelemetry, metrics are Prometheus, and errors go
+through the Sentry SDK.
 
 The names are a choice, and a practical one. Python carries most
 backend work and TypeScript most front-end work, so both stacks have

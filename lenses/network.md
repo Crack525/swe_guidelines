@@ -204,16 +204,19 @@ primitive.
 
 **Principle.** `/healthz` answers liveness with the version and no I/O,
 `/readyz` awaits the storage healthcheck, `/metrics` exposes counters
-and histograms, and the API prefix is applied once where routers are
+and histograms and is answered with a 404 at the load balancer, and
+the API prefix is applied once where routers are
 mounted.
 
 **Source.** The Network Layer, The Gateway (Health, Versioning).
 
-**Look for.** The three operational endpoints and what each does;
+**Look for.** The three operational endpoints and what each does; the
+load balancer's listener rules;
 whether liveness touches a dependency; where the version prefix is
 declared.
 
-**Violation.** A liveness check that queries the database; readiness
+**Violation.** A liveness check that queries the database; a load
+balancer rule that forwards `/metrics`; readiness
 that returns ok without checking storage; operational endpoints under
 the versioned prefix; routers that repeat the version prefix in their
 own paths.

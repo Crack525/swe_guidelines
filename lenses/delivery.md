@@ -46,7 +46,11 @@ same module graph; everything that differs between two environments is
 a variable, so the smaller environment predicts production with
 nothing more than scale changes. Production does not rebuild: it
 promotes the images the smaller environment already ran, by digest,
-behind an approval gate.
+behind an approval gate. Every environment collects what its processes
+emit: logs through the log driver into one log group per process with
+retention set; metrics and traces through a non-essential collector
+beside each task that adds only the service and the environment as
+dimensions.
 
 **Source.** Deployment, Cloud: AWS.
 
@@ -54,10 +58,13 @@ behind an approval gate.
 each environment instantiates and the variables it passes; resources
 that exist in one environment and not another; the deploy workflow's
 production job, how it obtains its images, and whether an approval
-step guards it.
+step guards it; the log configuration and the collector container in
+each task definition.
 
 **Violation.** A module, resource, or wiring present only in
-production; environment-specific branches in module code instead of
+production; a log group with no retention; `/metrics` or spans emitted
+in an environment where no collector reads them; a collector marked
+essential; a task identifier copied into metric dimensions; environment-specific branches in module code instead of
 variables; a production job that runs a build; a production task
 definition pinned to a tag rather than a digest; a promotion path with
 no approval gate.
@@ -92,7 +99,7 @@ stand-ins. Application processes run on the host, started by one
 script; a second compose file runs the application containers when the
 real images are needed. Developer dashboards (pgweb for Postgres,
 Valkey Admin for the cache, the consoles the local images ship, Jaeger
-for traces, the metrics view) live in an optional `devx` profile that
+for traces, GlitchTip for errors, the metrics view) live in an optional `devx` profile that
 nothing in CI starts, on host ports read from `.env`. The repository's
 `README.md` lists the local URL of each dashboard, of each service's
 API docs, and of each browser app. `make seed` runs `bootstrap` with a
@@ -442,8 +449,10 @@ is configured only when an endpoint is set, otherwise the no-op tracer
 runs. Metrics are exposed on `/metrics` in Prometheus format through
 the client library directly: every request counts once with its route
 template and status, and every queue, cache, and rate limit has a
-counter with an outcome label. Observability is the one capability
-used through its vendor API rather than a platform interface.
+counter with an outcome label; label values are bounded, never an id.
+Every process serves `/metrics`, a worker on a small port of its own.
+Observability is the one capability used through its vendor API
+rather than a platform interface.
 
 **Source.** Cross-Cutting Conventions, Traces and Metrics;
 Infrastructure, Infrastructure Principles.
@@ -451,13 +460,15 @@ Infrastructure, Infrastructure Principles.
 **Look for.** Tracing and metrics setup; a platform module that
 re-exposes spans, counters, or histograms under its own names; code
 paths that branch on whether tracing is configured; the counters
-declared next to each queue, cache, and rate limit.
+declared next to each queue, cache, and rate limit; the labels each
+metric takes; each worker's metrics port.
 
 **Violation.** A `PlatformTracer` or `MetricsInterface` wrapper; a
 second metrics system; code that skips instrumentation when no
 exporter is set instead of relying on the no-op tracer; a request
 counter missing the route template or status label; a queue, cache,
-or rate limit with no outcome counter.
+or rate limit with no outcome counter; an id as a label value; a
+worker that records metrics nothing can read.
 
 **Severity.** low
 
@@ -585,3 +596,30 @@ image tag or engine version past its end of life; a pre-release or
 release candidate.
 
 **Severity.** low
+
+## DEL-27 Every process reports errors, off until a DSN is set
+
+**Principle.** Errors are reported through the Sentry SDK, used
+directly, initialized at boot in every web service, worker, and
+browser app. Unhandled exceptions and `ERROR` log records become
+events tagged with the service, the release, and the request id.
+Reporting is off until a DSN is set, an empty value or `off` means
+unset, and a missing tracker never stops a boot. A browser app reports
+from each route's error element and from the React root's error
+callbacks. Locally the `devx` profile runs GlitchTip seeded with a
+fixed project key.
+
+**Source.** Cross-Cutting Conventions, Error Tracking.
+
+**Look for.** SDK initialization in each process's boot path; the tags
+set on events; how the DSN setting is read and what an empty or `off`
+value does; the browser app's route definitions and root; the local
+tracker in the compose file and its seeding.
+
+**Violation.** A worker or browser app with no error reporting; a boot
+that fails when the DSN is unset or the tracker is unreachable; events
+without the release or the request id; a browser app that reports only
+from one top-level boundary; a local tracker whose project key must be
+created by hand.
+
+**Severity.** medium

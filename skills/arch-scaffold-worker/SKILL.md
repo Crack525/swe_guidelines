@@ -57,11 +57,11 @@ Worker, under `workers/<worker-name>/`:
 |--------------------------------------------|-----------------------------------------------------------------------------------------|
 | `pyproject.toml`                           | the distribution; dependencies on `<root>-om` and `<root>-infra` through `[tool.uv.sources]`; a console entry point |
 | `src/<root>/workers/<worker>/__init__.py`  | empty                                                                                   |
-| `src/<root>/workers/<worker>/settings.py`  | one `BaseSettings`: queue, capacity, lease length, heartbeat interval, heartbeat failure limit, sweep interval |
+| `src/<root>/workers/<worker>/settings.py`  | one `BaseSettings`: queue, capacity, lease length, heartbeat interval, heartbeat failure limit, sweep interval, metrics port |
 | `src/<root>/workers/<worker>/handler.py`   | `<Kind>HandlerImpl(WorkHandlerInterface)` taking the managers it needs by interface (none for the maintenance worker) |
 | `src/<root>/workers/<worker>/container.py` | `WorkerContainer.build(settings)` and `for_tests(storage, infra)`, the same shape and order as a service container |
 | `src/<root>/workers/<worker>/loop.py`      | the loop: wake on `WORK_AVAILABLE` with a short poll fallback; claim `(queue, [<KIND>])` while a slot is free; run each item as a task that renews its lease (each renewal bounded by `asyncio.wait_for` at the renewal interval, a timeout counting as a failure) and cancels itself when renewal fails for half the lease; heartbeat liveness as a key in `CacheScope.WORKER_LIVENESS` under the system scope, written and read back on every beat (a miss is a failed beat), and stop claiming after repeated failures; the maintenance sweep on a timer, every step idempotent and wrapped; drain on stop |
-| `src/<root>/workers/<worker>/main.py`      | settings, container, stop handlers, `serve` and `health` (reads the worker's own liveness key, exits non-zero when it is missing) subcommands |
+| `src/<root>/workers/<worker>/main.py`      | settings, the same `boot(settings)` as a service (logging, error reporting, trust store, tracing), `/metrics` served alone on the metrics port, container, stop handlers, `serve` and `health` (reads the worker's own liveness key, exits non-zero when it is missing) subcommands |
 | `tests/test_handler.py`                    | the handler over the memory container, run twice with the same item                     |
 | `tests/test_loop.py`                       | claim within capacity, lease renewal, lease loss cancels the task, heartbeat failure pauses claiming, drain on stop |
 | `deployment/docker/<worker-name>.Dockerfile` | same shape as a service image, no exposed port; its `HEALTHCHECK` runs the `health` subcommand |
