@@ -546,3 +546,24 @@ satisfy; a substitution recorded as a deviation or a deviation recorded
 as a substitution.
 
 **Severity.** medium
+
+## DEL-26 Dependencies run on their latest stable or LTS release
+
+**Principle.** Every dependency runs on its latest stable release: the
+current active LTS line where the technology publishes one, the newest
+stable release its maintainers recommend otherwise. Pre-releases,
+release candidates, and lines past their end of life are not used.
+
+**Source.** Technology Choices and How to Override Them, Versions.
+
+**Look for.** `.python-version` and `requires-python`, `.nvmrc`, the
+`packageManager` field of `package.json`, Dockerfile base images,
+image tags in the local compose files, runtime steps in CI workflows,
+engine versions in Terraform, and the lock files.
+
+**Violation.** A runtime, tool, or service on an older release line
+than the current stable or LTS one; a Node line outside active LTS; an
+image tag or engine version past its end of life; a pre-release or
+release candidate.
+
+**Severity.** low

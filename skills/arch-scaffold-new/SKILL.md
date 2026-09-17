@@ -15,7 +15,7 @@ Gateway Verifies, the Tenancy Domain Owns), Deployment (Local: Docker
 Compose, What a Process Refuses), Monorepo Folder Structure (Layout
 Conventions), Cross-Cutting Conventions (Exceptions, Configuration,
 Records of Decisions), Technology Choices and How to Override Them
-(Overriding a Choice).
+(Versions, Overriding a Choice).
 
 ## Input
 
@@ -42,8 +42,8 @@ Skeleton:
 | File                                              | Holds                                                                                     |
 |---------------------------------------------------|-------------------------------------------------------------------------------------------|
 | `pyproject.toml`                                  | `[tool.uv] package = false`, `[tool.uv.workspace] members` (with a comment citing the root-package ADR by number), `[tool.uv.sources]`, pytest markers `integration`, `e2e`, `slow` |
-| `ruff.toml`, `pyrightconfig.json`, `.python-version` | shared Python lint, format, and type config                                            |
-| `package.json`, `pnpm-workspace.yaml`, `.nvmrc`, `tsconfig.base.json`, `eslint.config.js` (unless `--no-portal`) | the pnpm workspace over `apps/*` and `clients/*`, and the TypeScript and lint config every member extends |
+| `ruff.toml`, `pyrightconfig.json`, `.python-version` | shared Python lint, format, and type config; `.python-version` and `requires-python` name the latest stable Python release |
+| `package.json`, `pnpm-workspace.yaml`, `.nvmrc`, `tsconfig.base.json`, `eslint.config.js` (unless `--no-portal`) | the pnpm workspace over `apps/*` and `clients/*`, and the TypeScript and lint config every member extends; `.nvmrc` names the current active Node LTS release and `packageManager` the latest stable pnpm |
 | `.gitignore`, `.env.example`                      | ignores; every setting knob documented with its prefix                                    |
 | `Makefile`                                        | `setup`, `infra-up`, `infra-down`, `migrate` (every role, `--all`), `migrate-check` (ORM metadata against the migrated schema, per role), `check`, `test-unit`, `test-integration`, `openapi`, self-documented |
 | `README.md`                                       | how to set up, run, and check                                                             |
@@ -53,7 +53,7 @@ Skeleton:
 | `docs/adr/0002-technology-choices.md`             | the stack as adopted: every technology the guideline names, and per substitution the substitute, the reason, and the rules it must still satisfy |
 | `docs/runbooks/README.md`                         | where runbooks go                                                                         |
 | `.github/workflows/ci.yml`, `deploy.yml`         | `ci.yml` runs `make check`, then the integration job over the compose stack (`make migrate`, `make migrate-check`, `make test-integration`), `terraform fmt -check` and `validate` per environment, and an image build; `deploy.yml` deploys the smaller environment and promotes its images to production by digest behind an approval gate |
-| `deployment/local/docker-compose.yml`             | Postgres, a cache, a queue, an object store; host ports read from `.env` with non-default values, so a second project on the same machine does not collide |
+| `deployment/local/docker-compose.yml`             | Postgres, a cache, a queue, an object store, each image tagged at its latest stable release; host ports read from `.env` with non-default values, so a second project on the same machine does not collide |
 | `deployment/local/docker-compose.full.yml`        | the same plus the application containers                                                  |
 | `deployment/docker/entrypoint.sh`                 | the shared image entrypoint                                                               |
 | `deployment/terraform/modules/`, `deployment/terraform/environments/{dev,production}/` | one module per resource the settings name (database, cache, queue, buckets, secrets, service with rollout limits so a worker never exceeds its desired count), wired in both environments; environment names match the settings' cloud-environment set |

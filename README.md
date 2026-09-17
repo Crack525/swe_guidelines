@@ -13,7 +13,7 @@ the prescribed shape.
   technologies on purpose, says how a project substitutes its own, and
   ends with a pointer to a reference implementation that applies the
   whole document to one small project.
-- **[`lenses/`](lenses/README.md)**: 138 lenses in seven groups. Each
+- **[`lenses/`](lenses/README.md)**: 139 lenses in seven groups. Each
   restates one rule as something a reviewer can check against code and
   cites the section it comes from, by title.
 - **[`skills/`](skills/)**: Claude Code skills. Seven group reviews, one
@@ -59,6 +59,7 @@ in its own `specs/` folder are in [`docs/adopting.md`](docs/adopting.md).
 | `arch-scaffold-app`       | A browser app, an operator console, or a CLI                                 |
 | `arch-explain`            | Answers a question about the architecture with citations                     |
 | `arch-deviate`            | Records a deliberate deviation as an ADR in the consuming project            |
+| `arch-upgrade-deps`       | Moves every dependency to its latest stable or LTS release and runs the gates |
 | `arch-new-aspect`         | Incorporates a new aspect into the guideline and cascades it through lenses, skills, and docs (runs in a checkout of this repository) |
 
 Every review skill takes the same argument (empty for the current
@@ -77,7 +78,8 @@ make gen-skills   # regenerate the seven group review skills from the template
 make gen-toc      # regenerate the table of contents of architecture.md
 ```
 
-Requirements: Python 3.12 or newer, Node 22 or newer. `make lint`
+Requirements: Python 3.14 and Node 24, the latest stable and LTS
+releases. `make lint`
 fetches `markdownlint-cli2` through `npx` at a pinned version. CI runs
 `make check` on every pull request.
 

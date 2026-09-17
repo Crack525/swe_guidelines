@@ -18,6 +18,19 @@ which number.
   a closing pointer to Tadas (<https://github.com/baristaze/tadas>), a
   to-do app for teams that applies the guideline end to end; linked
   from the introduction. Patch.
+- `architecture.md`: "Versions", a subsection of "Technology Choices
+  and How to Override Them": every dependency runs on its latest
+  stable release, the current active LTS line where one exists; linked
+  from "Local: Docker Compose" and "Layout Conventions"; lens `DEL-26`;
+  `arch-scaffold-new`, `arch-scaffold-service`, and the scaffold
+  conventions pin new runtimes, images, and libraries at those
+  releases; this repository's CI moves to Python 3.14, Node 24.21.0,
+  and the latest action and markdownlint releases (MD060, new in that
+  release, is off like MD013). Minor.
+- `skills/arch-upgrade-deps`: moves every dependency of a project to
+  its latest stable or LTS release from the maintainers' release data,
+  runs the fast and integration gates, and holds back an upgrade that
+  breaks them.
 - `scripts/check_links.py` checks a link whose text wraps across
   lines; before, a line break hid the anchor from the checker.
 - `architecture.md`: a generated table of contents (`make gen-toc`,
@@ -26,13 +39,13 @@ which number.
 - `skills/arch-new-aspect`: incorporates a new aspect into the
   guideline and cascades it through lenses, skills, docs, README, and
   this changelog.
-- `lenses/`: 138 review lenses in seven groups, each citing its
+- `lenses/`: 139 review lenses in seven groups, each citing its
   section by title.
 - Skills: `arch-review-<group>` for each group, `arch-review-full`,
   `arch-scaffold-new`, `arch-scaffold-namespace`,
   `arch-scaffold-entity`, `arch-scaffold-service`,
   `arch-scaffold-worker`, `arch-scaffold-app`, `arch-explain`,
-  `arch-deviate`.
+  `arch-deviate`, `arch-upgrade-deps`.
 - `agents/arch-reviewer.md`: the subagent the full review fans out to.
 - Plugin and marketplace manifests under `.claude-plugin/`.
 - Checkers: markdownlint, lens format and citations, vocabulary leaks,

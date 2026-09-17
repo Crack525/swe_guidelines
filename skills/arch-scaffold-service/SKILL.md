@@ -62,7 +62,7 @@ Under `services/<service-name>/`:
 | `tests/test_health.py`                        | `/healthz` and `/readyz`                                                                        |
 | `tests/test_<ns>_api.py`                      | one round trip per hosted namespace (seeding an org and its owner through the tenancy manager first), plus the error envelope and one rate-limited route |
 | `tests/test_realtime_timeouts.py` (with `--realtime`) | asserts the ping interval and idle timeout against `deployment/realtime-timeouts.json`, the service half of the shared-file rule |
-| `deployment/docker/<service-name>.Dockerfile` | two stages, locked install of this package, non-root, healthcheck on `/healthz`                |
+| `deployment/docker/<service-name>.Dockerfile` | two stages on a base image at the Python release `.python-version` names, locked install of this package, non-root, healthcheck on `/healthz` |
 
 The service interface and impl exist from the single-process start,
 so a split later moves a module instead of extracting one; routers

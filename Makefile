@@ -2,7 +2,7 @@
 SHELL := /bin/bash
 PYTHON := python3
 NPX := npx --yes
-MARKDOWNLINT := $(NPX) markdownlint-cli2@0.18.1
+MARKDOWNLINT := $(NPX) markdownlint-cli2@0.23.2
 
 .PHONY: help check lint lenses leaks links toc skills plugin gen-skills gen-skills-check gen-toc clean
 

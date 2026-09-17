@@ -4,6 +4,8 @@
     "default": true,
     // Prose is wrapped by hand; tables, code, and tree diagrams run long.
     "MD013": false,
+    // Wide tables keep their pipes unaligned for the same reason.
+    "MD060": false,
     // The guideline uses pandoc-style list indentation ("-   item").
     "MD007": false,
     "MD030": false,

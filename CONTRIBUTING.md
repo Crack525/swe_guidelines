@@ -26,7 +26,7 @@ its own voice.
 1. Open an issue first for anything beyond a typo, so the change can be
    discussed as a rule before it is discussed as a diff.
 2. Fork, branch from `main`, make the change.
-3. Run `make check`. It needs Python 3.12 or newer and Node 22 or newer;
+3. Run `make check`. It needs Python 3.14 and Node 24 (the current LTS);
    markdownlint is fetched by `npx` on first run.
 4. Open a pull request. Describe the rule that changes and why, in the
    same voice as the guideline. Link the issue.

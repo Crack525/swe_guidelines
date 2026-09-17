@@ -114,6 +114,7 @@ why they are named and how a project substitutes its own.
   - [The App Container](#the-app-container)
   - [Records of Decisions](#records-of-decisions)
 - [Technology Choices and How to Override Them](#technology-choices-and-how-to-override-them)
+  - [Versions](#versions)
   - [Overriding a Choice](#overriding-a-choice)
 - [Next: An End-to-End Reference Implementation](#next-an-end-to-end-reference-implementation)
 <!-- /toc -->
@@ -2092,7 +2093,8 @@ Local development and tests run entirely on the developer's machine.
 Every technology piece the platform depends on (Postgres, the cache,
 the object store, the queue) runs as a local container through a single
 `docker-compose` stack, using the cloud's images where possible or a
-wire-compatible stand-in where not. Application processes run on the
+wire-compatible stand-in where not, each at the version
+[Versions](#versions) sets. Application processes run on the
 host, started by one script, so a code change is a restart and a
 debugger attaches without ceremony; a second compose file runs the
 application containers too. An optional profile adds developer
@@ -2295,7 +2297,8 @@ and declares a healthcheck against `/healthz`.
 Workspace tooling lives at the repo root: a single `pyproject.toml`
 declares the uv workspace members, a single `package.json` plus
 `pnpm-workspace.yaml` declares the TypeScript members, and lint,
-format, and type-check config sit next to them. `make check` is the
+format, and type-check config sit next to them. `.python-version` and
+`.nvmrc` pin the runtimes at the releases [Versions](#versions) sets. `make check` is the
 fast local gate (lint, format, types, unit tests) and CI runs it plus
 the integration, migration, image, and infrastructure jobs.
 
@@ -2568,6 +2571,31 @@ shape.
 
 > **Principle:** Named technologies are defaults. The shapes are the
 > guideline; the names make the shapes concrete.
+
+### Versions
+
+Every dependency runs on its latest stable release: the language
+runtimes (Python, Node), the workspace and package tools (uv, pnpm),
+the container engine (Docker), the backing services (Postgres, the
+cache, the queue), and the libraries every workspace member installs.
+
+Where a technology publishes a long-term support line, the version is
+the current active LTS release, not a newer line that has not entered
+it. Where a technology publishes no such line, the version is the
+newest stable release its maintainers recommend. Pre-releases, release
+candidates, and lines past their end of life are not used.
+
+The version is stated where the tool reads it: `.python-version` and
+`requires-python` for Python, `.nvmrc` for Node, the `packageManager`
+field of `package.json` for pnpm, the base image of every Dockerfile,
+the image tags of the [local compose stack](#local-docker-compose), the
+runtime steps of CI, and the engine versions declared in Terraform.
+The lock files hold the libraries at the versions those declarations
+resolve.
+
+> **Principle:** Every dependency runs on its latest stable release:
+> the current active LTS line where one exists, the newest stable
+> release otherwise.
 
 ### Overriding a Choice
 
