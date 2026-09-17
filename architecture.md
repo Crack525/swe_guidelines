@@ -2097,9 +2097,21 @@ wire-compatible stand-in where not, each at the version
 [Versions](#versions) sets. Application processes run on the
 host, started by one script, so a code change is a restart and a
 debugger attaches without ceremony; a second compose file runs the
-application containers too. An optional profile adds developer
-dashboards (a database browser, metrics, traces) that nothing in CI
-depends on.
+application containers too.
+
+Developer dashboards live in an optional compose profile named `devx`,
+started only when a developer asks for it and never by CI. The profile
+holds one browser per backing service the stack runs (pgweb for
+Postgres, RedisInsight for the cache, the console of the object store
+or the queue where its local image ships one, Jaeger for traces) and
+the metrics view, each on a host port read from the same `.env` as the
+rest of the stack.
+
+The repository's `README.md` lists every local URL a developer opens:
+each dashboard, the interactive API docs of each service, and each
+browser app. A developer inspecting data, trying an operation, or
+debugging a flow reaches the right page without reading the compose
+file or the start script.
 
 > **Principle:** Every dependency runs in a local container. The
 > application runs on the host.

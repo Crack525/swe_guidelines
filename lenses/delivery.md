@@ -90,19 +90,27 @@ others.
 through one compose stack, using cloud images or wire-compatible
 stand-ins. Application processes run on the host, started by one
 script; a second compose file runs the application containers when the
-real images are needed. Developer dashboards are an optional profile
-nothing in CI depends on.
+real images are needed. Developer dashboards (pgweb for Postgres,
+RedisInsight for the cache, the consoles the local images ship, Jaeger
+for traces, the metrics view) live in an optional `devx` profile that
+nothing in CI starts, on host ports read from `.env`. The repository's
+`README.md` lists the local URL of each dashboard, of each service's
+API docs, and of each browser app.
 
 **Source.** Deployment, Local: Docker Compose.
 
 **Look for.** `deployment/local/docker-compose.yml` and its full
-variant; the start script; the profile that holds dashboards; CI jobs
-that reference compose services.
+variant; the start script; the `devx` profile and the dashboards it
+holds; the local URLs in `README.md`; CI jobs that reference compose
+services.
 
 **Violation.** A dependency the application needs that the compose
 stack does not run; application services baked into the default
 compose file so a code change needs an image rebuild; a CI job that
-depends on a dashboard container.
+depends on a dashboard container; a dashboard in the default profile;
+a backing service with no dashboard in `devx`; a dashboard port fixed
+in the compose file; a dashboard, a service's API docs, or a browser
+app whose local URL the `README.md` does not list.
 
 **Severity.** medium
 

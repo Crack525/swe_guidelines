@@ -75,6 +75,7 @@ hold no logic of their own at any stage.
 | `pyproject.toml` (root)                 | the member added to `[tool.uv.workspace] members`                                |
 | `Makefile`                              | the `openapi` target emits this service's document into `packages/api-client/openapi.json` when that package exists, else next to the service; the app skill moves it |
 | `scripts/dev.sh`                        | starts the service on its port                                                   |
+| `README.md` (root)                      | a row in the `Local URLs` table: the service's interactive API docs at `http://localhost:<port>/docs` |
 | `deployment/local/docker-compose.full.yml` (with `--container`) | the service as a container                                 |
 | `services/<existing>/gateway/` (when a service already exists) | moved into a workspace distribution `gateway/` that every service imports; nothing is copied |
 

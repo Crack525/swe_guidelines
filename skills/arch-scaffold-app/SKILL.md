@@ -75,6 +75,7 @@ CLI, under `apps/<app-name>/`:
 | `deployment/realtime-timeouts.json` (portal, when absent) | the ping interval and load balancer idle timeout, asserted by a client test and a service test |
 | `pyproject.toml` (root, CLI)            | the member added to `[tool.uv.workspace] members`                         |
 | `scripts/dev.sh`                        | starts the browser app's dev server                                       |
+| `README.md` (root, browser app)         | a row in the `Local URLs` table: the app's dev server at `http://localhost:<port>` |
 
 ## Procedure
 

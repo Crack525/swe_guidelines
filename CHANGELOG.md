@@ -6,6 +6,18 @@ which number.
 
 ## Unreleased
 
+### Changed
+
+- `architecture.md`: "Local: Docker Compose" names the developer
+  dashboard profile `devx` (pgweb, RedisInsight, the local images'
+  consoles, Jaeger for traces, the metrics view, ports from `.env`) and
+  has the repository's `README.md` list the local URL of each
+  dashboard, each service's API docs, and each browser app; lens
+  `DEL-04` sharpened; `arch-scaffold-new` writes the profile, a
+  `devx-up` target, the ports in `.env.example`, and the `Local URLs`
+  table in `README.md`; `arch-scaffold-service` and `arch-scaffold-app`
+  add their rows to it. Minor.
+
 ## 0.2.0 (2026-09-17)
 
 ### Added
