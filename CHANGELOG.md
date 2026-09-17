@@ -6,6 +6,8 @@ which number.
 
 ## Unreleased
 
+## 0.3.0 (2026-09-17)
+
 ### Added
 
 - `architecture.md`: "Error Tracking", a subsection of "Cross-Cutting
