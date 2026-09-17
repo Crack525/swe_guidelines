@@ -91,7 +91,7 @@ through one compose stack, using cloud images or wire-compatible
 stand-ins. Application processes run on the host, started by one
 script; a second compose file runs the application containers when the
 real images are needed. Developer dashboards (pgweb for Postgres,
-RedisInsight for the cache, the consoles the local images ship, Jaeger
+Valkey Admin for the cache, the consoles the local images ship, Jaeger
 for traces, the metrics view) live in an optional `devx` profile that
 nothing in CI starts, on host ports read from `.env`. The repository's
 `README.md` lists the local URL of each dashboard, of each service's

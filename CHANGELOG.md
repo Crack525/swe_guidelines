@@ -9,7 +9,7 @@ which number.
 ### Changed
 
 - `architecture.md`: "Local: Docker Compose" names the developer
-  dashboard profile `devx` (pgweb, RedisInsight, the local images'
+  dashboard profile `devx` (pgweb, Valkey Admin, the local images'
   consoles, Jaeger for traces, the metrics view, ports from `.env`) and
   has the repository's `README.md` list the local URL of each
   dashboard, each service's API docs, and each browser app; lens
@@ -17,6 +17,10 @@ which number.
   `devx-up` target, the ports in `.env.example`, and the `Local URLs`
   table in `README.md`; `arch-scaffold-service` and `arch-scaffold-app`
   add their rows to it. Minor.
+- `architecture.md`: "Technology Choices and How to Override Them" and
+  "Local: Docker Compose" name Valkey as the cache; the `devx` profile
+  browses it with Valkey Admin; `arch-scaffold-new` runs the Valkey
+  image locally and depends on the `valkey-glide` client. Minor.
 
 ## 0.2.0 (2026-09-17)
 

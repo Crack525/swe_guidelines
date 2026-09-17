@@ -2090,8 +2090,8 @@ every environment are part of CI.
 ### Local: Docker Compose
 
 Local development and tests run entirely on the developer's machine.
-Every technology piece the platform depends on (Postgres, the cache,
-the object store, the queue) runs as a local container through a single
+Every technology piece the platform depends on (Postgres, Valkey as
+the cache, the object store, the queue) runs as a local container through a single
 `docker-compose` stack, using the cloud's images where possible or a
 wire-compatible stand-in where not, each at the version
 [Versions](#versions) sets. Application processes run on the
@@ -2102,7 +2102,7 @@ application containers too.
 Developer dashboards live in an optional compose profile named `devx`,
 started only when a developer asks for it and never by CI. The profile
 holds one browser per backing service the stack runs (pgweb for
-Postgres, RedisInsight for the cache, the console of the object store
+Postgres, Valkey Admin for the cache, the console of the object store
 or the queue where its local image ships one, Jaeger for traces) and
 the metrics view, each on a host port read from the same `.env` as the
 rest of the stack.
@@ -2559,11 +2559,11 @@ that fails the build holds.
 
 This document names technologies, not only shapes. The object model is
 Python on Pydantic; storage is SQLAlchemy and Alembic over Postgres;
-infrastructure impls target a hosted cache, an S3-like object store,
-and a hosted queue; browser apps are React and TypeScript on Vite with
-TanStack Query and Zustand; workspaces are uv and pnpm; the local stack
-is Docker Compose; the cloud is AWS, declared in Terraform; traces are
-OpenTelemetry and metrics are Prometheus.
+infrastructure impls target Valkey as the cache, an S3-like object
+store, and a hosted queue; browser apps are React and TypeScript on
+Vite with TanStack Query and Zustand; workspaces are uv and pnpm; the
+local stack is Docker Compose; the cloud is AWS, declared in Terraform;
+traces are OpenTelemetry and metrics are Prometheus.
 
 The names are a choice, and a practical one. Python carries most
 backend work and TypeScript most front-end work, so both stacks have
