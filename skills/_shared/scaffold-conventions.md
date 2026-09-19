@@ -90,7 +90,11 @@ the order the guideline presents them, never by number.
   one round trip is a placeholder.
 - Every write follows authorize, verify, copy (an update sets
   `updated_at` and `updated_by` in the copy; a create copies nothing),
-  write, and returns the copy it wrote. A `core`-role write lands the
+  write, and returns the copy it wrote. Authorize is
+  `ctx.require(<permission>)` as the first line of every mutating
+  manager operation, before any read, the ones a worker calls
+  included (complete, fail, defer, release, extend the lease), as The
+  Business Layer (Shape of an Operation) states. A `core`-role write lands the
   core row and its `OutboxRow` in one storage method and the manager
   relays the row at once. The caller constructs the entity whole and hands it to
   `create_<entity>`; the one exception is an entity that carries a
@@ -104,6 +108,10 @@ the order the guideline presents them, never by number.
   status and code come from the shape.
 - Wire types are hand-written; routers translate and never decide;
   list routes take a server-clamped `limit`.
+- Every creating route (every `POST` that answers 201) declares the
+  gateway's `Idempotency-Key` dependency, in every namespace, so a
+  retried create returns the stored response, as The Network Layer
+  (The Gateway) states for a creating `POST`.
 - A workspace member that depends on another declares it under
   `[tool.uv.sources] <root>-om = { workspace = true }` and is listed in
   the root's `[tool.uv.workspace] members`.

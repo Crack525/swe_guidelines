@@ -44,7 +44,7 @@ and a remote service impl import it):
 
 | File                  | Holds                                                                                   |
 |-----------------------|-----------------------------------------------------------------------------------------|
-| `pyproject.toml`, `src/<root>/clients/api/` | `<root>-client`: one typed client over `httpx` generated from the committed OpenAPI document, the bearer or the internal credential, the app header, the error envelope parsed into a typed error carrying the request id, the OS trust store; `Idempotency-Key` on every creating call |
+| `pyproject.toml`, `src/<root>/clients/api/` | `<root>-client`: one typed client over `httpx` generated from the committed OpenAPI document, the bearer or the internal credential, the app header, the error envelope parsed into a typed error carrying the request id, the OS trust store; `Idempotency-Key` on every creating call; the base URL and the credential arrive through its constructor, never from the environment |
 
 Browser app (`portal` or `admin`), under `apps/<app-name>/`:
 
@@ -68,7 +68,9 @@ CLI, under `apps/<app-name>/`:
 |-------------------------------------------|---------------------------------------------------------------------------|
 | `pyproject.toml`                          | the distribution, `typer`, and `<root>-client` as a workspace source; a console entry point |
 | `src/<root>/apps/<app>/__init__.py`       | empty                                                                     |
-| `src/<root>/apps/<app>/main.py`           | the command groups, one per namespace                                     |
+| `src/<root>/apps/<app>/settings.py`       | one `BaseSettings` under the product prefix (API URL, token, home), read once at the start of `main` and handed to the client's constructor; nothing below `main` reads `os.environ` |
+| `src/<root>/apps/<app>/main.py`           | the command groups, one per namespace; `main` builds the settings and the client once and hands them down |
+| `src/<root>/apps/<app>/listen.py` (when the API has a socket) | the feed command over the realtime channel: it keeps the last contiguous `seq` from the hello frame and each push, and replays from `GET /v1/events?after_seq=` on a gap or a reconnect, never skipping |
 | `src/<root>/apps/<app>/follow.py`         | submit-and-follow for long operations, exit code from the outcome         |
 | `tests/test_cli.py`                       | commands over a stubbed client                                            |
 
@@ -91,7 +93,12 @@ CLI, under `apps/<app-name>/`:
 ## Procedure
 
 1. Browser app: feature code never calls `fetch` and never imports
-   `schema.d.ts`; everything goes through `src/api/`.
+   `schema.d.ts`; everything goes through `src/api/`. A view never
+   re-implements a domain rule to enable or disable an action (the
+   last owner cannot be removed, the password rule): the service
+   exposes the decision as a flag on the view, or the client acts on
+   the error envelope the server returns, as Apps (Apps Are Dumb)
+   states.
 2. Portal: every realtime envelope routes into the query cache, never
    into components; the provider owns reconnection with backoff and the
    degraded polling mode with its banner.
@@ -99,7 +106,9 @@ CLI, under `apps/<app-name>/`:
    the operator gate rendered from the API's own refusal.
 4. CLI: every call goes through `<root>-client`; creating calls send
    `Idempotency-Key`; followed operations poll at a fixed cadence and
-   exit non-zero on failure.
+   exit non-zero on failure; the settings are read once at the start
+   of `main` and reach the client through its constructor, as
+   Cross-Cutting Conventions (Configuration) states for every process.
 5. Browser app: the app is not done until every Terraform environment
    declares its bucket, distribution, and subdomain, the API allows its
    origin, and the deploy workflow ships its bundle, built once and
