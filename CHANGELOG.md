@@ -6,6 +6,26 @@ which number.
 
 ## Unreleased
 
+## 0.4.3 (2026-09-19)
+
+### Changed
+
+- `scripts/check_leaks.py`: the assistant-tooling term group is gone;
+  "agent", "AI", "LLM", "prompt" are ordinary words in the guideline
+  and the lenses. "Multiple impls per interface", "Technology Choices
+  and How to Override Them", and "Next: An End-to-End Reference
+  Implementation" say "agent" where they said "program" or "automated
+  author", and "The Gateway" and lens `CTX-18` say an agent presents
+  an API key; `arch-new-aspect`, `AGENTS.md`, and the Makefile no
+  longer ask for the rephrasing. Patch.
+- `architecture.md`: "Operations Without a Principal" names the one
+  kind that takes a tenant id in place of a context, the outbox relay
+  and the event append it performs (`(org_id, row)`), which "Database
+  Roles" and the scaffold already prescribe; lens `CTX-16` says the
+  same. Lens `OM-03` lists `updated_by` among the `Trackable` fields,
+  as "Naming Entities" does. Both from the second review of the
+  reference implementation's sibling. Patch.
+
 ## 0.4.2 (2026-09-19)
 
 ### Changed
@@ -85,7 +105,7 @@ which number.
 
 - `architecture.md`: "Multiple impls per interface" says why the
   technology impl and the memory impl pair is a lever rather than a
-  cost: a program writes and keeps the memory impl cheaply, the shape
+  cost: an agent writes and keeps the memory impl cheaply, the shape
   generalizes (a dict keyed by tenant and id plus the relational
   filters), and the pair is what lets an application run in-process in
   a test, a backend swap at the root, and impls compose; linked to
