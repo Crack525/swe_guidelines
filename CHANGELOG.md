@@ -6,6 +6,59 @@ which number.
 
 ## Unreleased
 
+## 0.4.1 (2026-09-18)
+
+### Changed
+
+- Scaffold skills: `scaffold-conventions.md` finds the guideline
+  version before writing (`plugin.json` against the changelog's first
+  release heading; a snapshot between releases is named, not pinned)
+  and prints it in the output; tests are counted in cases, not files
+  (one contract case per storage method, one refusal per authorization
+  rule, one test per rate-limited route, one per exit code, one per
+  infra capability); `arch-scaffold-new` pins only a release the two
+  agree on, adds the settings check to the infra tests (every
+  `InfraSettings` field in `.env.example`), passes every prefix the
+  settings read and the database URL as its own secret through
+  Terraform, adds the interface check to the OM unit tests (every
+  `*Interface` an `ABC` with abstract methods), and ends with
+  `arch-review-full` over the tree with every high finding closed; `arch-scaffold-service` adds
+  `tests/test_settings.py` (every settings field in `.env.example`,
+  every field without a local default set or wired in each Terraform
+  environment); `docs/adopting.md` says to update the plugin before a
+  scaffold or a review. From the second one-shot run of
+  `arch-scaffold-new`. Patch.
+
+### Added
+
+- `architecture.md`: "Multiple impls per interface" says why the
+  technology impl and the memory impl pair is a lever rather than a
+  cost: a program writes and keeps the memory impl cheaply, the shape
+  generalizes (a dict keyed by tenant and id plus the relational
+  filters), and the pair is what lets an application run in-process in
+  a test, a backend swap at the root, and impls compose; linked to
+  "The App Container", "Storage Root", "Composition by decoration",
+  and the reference implementation. No lens: a rationale. Patch.
+- `architecture.md`: "Scalability by Design", a closing rationale that
+  says horizontal scalability is what most of the rules add up to and
+  names them by anchor (stateless services, services per namespace,
+  `org_id`-first storage, database roles, the work queue and workers
+  per lane, the outbox and the idempotent consumer, cache scopes,
+  topics and one realtime channel per app, immutability and pure
+  rules, the app container): scale out by adding processes, never by
+  changing code; linked from the introduction and from "Web Services
+  as Scalability Units"; `README.md` summary. No lens: a rationale.
+  Patch.
+- `architecture.md`: "The App Container" says why the roots are built
+  whole, once per process, and never per request or on first use: a
+  constructor holds references and opens nothing, so every root builds
+  in microseconds, the imports are paid once at module load, and a
+  wiring error surfaces at boot, where the process exits and readiness
+  never reports ready, rather than at the first request that needs the
+  missing piece; linked to "Storage Root", "InfraInterface Root", and
+  the reference implementation. No lens: a rationale that `CON-09` and
+  `CON-16` already check. Patch.
+
 ## 0.4.0 (2026-09-18)
 
 ### Added
