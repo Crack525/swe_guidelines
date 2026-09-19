@@ -11,9 +11,10 @@ the prescribed shape.
   of contents and named anchor links between sections. Read it once
   end to end; it is written to be read that way. It names its
   technologies on purpose, says how a project substitutes its own,
-  says why the system scales out by adding processes, and ends with a
-  pointer to a reference implementation that applies the whole
-  document to one small project.
+  says which team it is written for and up to which limits the system
+  grows by deployment changes alone, and ends with a pointer to a
+  reference implementation that applies the whole document to one
+  small project.
 - **[`lenses/`](lenses/README.md)**: 143 lenses in seven groups. Each
   restates one rule as something a reviewer can check against code and
   cites the section it comes from, by title.
@@ -90,7 +91,8 @@ make gen-toc      # regenerate the table of contents of architecture.md
 ```
 
 Requirements: Python 3.14 and Node 24, the latest stable and LTS
-releases. `make lint`
+releases. The scripts need nothing past the standard library; the pin
+follows the guideline's own latest-stable rule on purpose. `make lint`
 fetches `markdownlint-cli2` through `npx` at a pinned version. CI runs
 `make check` on every pull request.
 
