@@ -6,6 +6,101 @@ which number.
 
 ## Unreleased
 
+## 0.12.0 (2026-09-19)
+
+Two readings of 0.11.0 against itself, one in this repository and one
+by a second reviewer, for the places where one file names a shape
+another file cannot hold. Minor: one rule is narrowed where it never
+applied and one is widened, and the changelog names both; the rest is
+where a rule was stated twice and the two statements had drifted.
+
+### Changed
+
+- `architecture.md`, "Multiple impls per interface": a manager
+  interface has one impl, named as the exception to the two-impl
+  rule, because a manager carries no technology of its own and the
+  pair it runs over is the storage and the infrastructure under it.
+  This narrows "an interface has at least two impls", which every
+  manager in the document already stood outside. Lens `CON-03`.
+- `architecture.md`, "Client Rendering": the bundle also talks to the
+  error tracker when one is configured, so the list that section
+  closes holds the origins "API Access" and "Error Tracking" already
+  require of it; a browser app reports errors like every other
+  process. This widens "and nothing else". Lens `DEL-12`.
+- `architecture.md`, "Queues": the capability interface is
+  `QueuesInterface`, like the `TopicsInterface` and `BucketsInterface`
+  beside it and the `get_queues()` getter that returns it.
+- `architecture.md`, "Monorepo Folder Structure": the OM's `tests/`
+  tree shows `contracts/`, the storage cases the unit and the
+  integration suites both run, which "Tests" describes and every
+  scaffold writes.
+- `lenses/README.md`: the group table names subsections by their
+  titles, "Service Interfaces and Impls", "The App Container",
+  "Idempotency on the Consumer Side", and "Long-Running
+  Orchestrations", so the two review skills generated from those rows
+  carry the titles too. `DEL-12` drops the operator-console sentence
+  `DEL-16` owns.
+- Skills: `arch-scaffold-new` gives the infra distribution its own
+  `InfraException` root and has its cloud impls raise it, since infra
+  imports nothing from the OM; its `opcontext.py` row no longer names
+  a `build_context` helper, because nothing but a transition builds a
+  stage above the request stage. `arch-scaffold-entity` fills the
+  outbox payload with the entity's own dump, as "Shape of an
+  Operation" writes it.
+- `docs/adopting.md`: the scaffold's review pass is described by what
+  it does, closing every high finding before it hands the tree over,
+  not by a count of findings.
+- `architecture.md`, "Migrations": the check that the ORM metadata and
+  the migrated schema agree needs a migrated database, so it runs in
+  CI's integration job beside the downgrade-then-upgrade, not in the
+  fast gate "Tests" defines as memory-only. Lens `STO-24`.
+- `architecture.md`, "The Gateway": the error envelope carries an
+  `InfraException` too, with the status and the code the exception
+  carries, as "Exceptions" already asks of the gateway and the worker
+  loop alike. Lenses `NET-07`, `DEL-18`; the service scaffold
+  registers both handlers.
+- `architecture.md`, "Identifiers": the example of a required
+  reference no tenant and no person owns is `updated_by` on an item
+  the platform claimed, since "Naming Entities" gives a bookkeeping
+  row no `created_by` at all. Lens `OM-13`.
+- `architecture.md`, "Local: Docker Compose": the `devx` profile is
+  started by the developer commands below it, `make up` among them,
+  and never by CI. Lens `DEL-33`.
+- Lenses read back against the sections they restate: `CTX-01` names
+  the identity and the operator stage a first argument takes; `CTX-22`
+  admits the scope another scope is built on, as `TenantScope` is;
+  `NET-12` says intra-service calls need no TLS rather than that the
+  traffic is plain; `CON-17` says which stamp belongs to a create and
+  which to an update; `ASY-06` leaves the rate-limit counter, the
+  generation, and the liveness beat cache-only by design; `STO-21`
+  purges a soft-deleted row after its retention period; `STO-03`
+  states the criterion the guideline states, an invariant two rows
+  must hold together; `DEL-33` asks for a dashboard where the local
+  image ships a console.
+- Lens sources and owners: `CON-09` cites Storage Root for the getters,
+  `NET-01` the section that shapes an app-specific service, `STO-04`
+  Database Roles for its cross-role clause. One owner per rule:
+  `ASY-25` leaves the hand-back that spends no attempt to `ASY-26`,
+  `DEL-31` the approval on the plan to `DEL-38`, and `CON-14` the
+  router's own call to `CON-15`.
+- Skills: `arch-scaffold-new` writes five mixins, not four, and
+  re-exports `StorageInterface` from `storage/__init__.py`, since the
+  guideline puts the root at `<root>.om.storage`; `arch-scaffold-service`
+  and `arch-scaffold-worker` say what `--container` does, the second
+  compose file, with `scripts/dev.sh` starting the process on the host
+  either way; the worker's `/healthz` answers from the loop's own
+  state with no I/O, its `AppContext` version is a version, and its
+  `WorkItem` row no longer adds the `claim_token` The Work Queue
+  declares; the shared conventions name `create_<entity>` and
+  `append_<entity>` beside the reads and the write.
+- `allowed-tools` names only what a body runs: `Bash(git diff:*)`
+  leaves the six scaffolds and the upgrader, `uv init` and `uv add`
+  leave `arch-scaffold-new`, which now names `git rev-parse` where it
+  refuses to run inside a repository.
+- `README.md` and `docs/adopting.md`: a scaffold reads the version it
+  shipped with and names it in its output; a review skill does not,
+  and the docs no longer promise it.
+
 ## 0.11.0 (2026-09-19)
 
 An outside review of 0.10.0 read the guideline, the lenses, the skills,
