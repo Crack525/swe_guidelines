@@ -220,23 +220,25 @@ primitive. (What a create that issued a secret stores is NET-31.)
 ## NET-10 Health, readiness, and metrics live outside the versioned API
 
 **Principle.** `/healthz` answers liveness with the version and no I/O,
-`/readyz` awaits the storage healthcheck, `/metrics` exposes counters
-and histograms and is answered with a 404 at the load balancer, and
-the API prefix is applied once where routers are
-mounted.
+`/readyz` awaits the storage healthcheck under a deadline shorter than
+its poll interval and counts a timeout as a negative answer,
+`/metrics` exposes counters and histograms and is answered with a 404
+at the load balancer, and the API prefix is applied once where routers
+are mounted.
 
 **Source.** The Network Layer, The Gateway (Health, Versioning).
 
 **Look for.** The three operational endpoints and what each does; the
-load balancer's listener rules;
-whether liveness touches a dependency; where the version prefix is
-declared.
+load balancer's listener rules; whether liveness touches a dependency;
+the deadline readiness applies to its healthcheck and the poll
+interval configured against it; where the version prefix is declared.
 
 **Violation.** A liveness check that queries the database; a load
 balancer rule that forwards `/metrics`; readiness
-that returns ok without checking storage; operational endpoints under
-the versioned prefix; routers that repeat the version prefix in their
-own paths.
+that returns ok without checking storage; a readiness probe that waits
+on storage with no bound, so it stops answering exactly when the
+answer matters; operational endpoints under the versioned prefix;
+routers that repeat the version prefix in their own paths.
 
 **Severity.** medium
 
@@ -600,25 +602,29 @@ run and the rerun.
 
 ## NET-26 Every outbound call carries a timeout from settings
 
-**Principle.** Every outbound call carries a timeout: the transport
-client reads one from settings, one per client, and no call goes out
-without one, so a downstream that hangs cannot hold a replica's whole
-pool. The gateway bounds a request the same way, with a deadline from
-settings; the lease that bounds a work handler is ASY-17.
+**Principle.** Every outbound call carries a timeout from settings,
+one per client, and no call goes out without one. The gateway bounds a
+request with a deadline, a statement carries one too, and the lease
+that bounds a work handler is ASY-17, so nothing a process waits on is
+unbounded.
 
-**Source.** The Network Layer, Clients Live in One Place.
+**Source.** The Network Layer, Clients Live in One Place; The Storage
+Layer, A Storage Impl.
 
 **Look for.** The construction of every transport client, in Python
 and in TypeScript; the settings field it reads; any call site that
 builds a request outside the client; the request deadline setting and
-the middleware or dependency that applies it to every route.
+the middleware or dependency that applies it to every route; the
+statement deadline the storage impls set and the settings field behind
+it.
 
 **Violation.** A client constructed with no timeout, or with a library
 default nothing in settings names; a timeout hard-coded in the client
 instead of read from settings; a per-call override that disables it; a
 `fetch` or an `httpx` call outside the client with no deadline; a
 request path with no deadline, so a slow handler holds a server slot
-for good.
+for good; a statement issued with no deadline, so a query that hangs
+holds its connection until the engine gives up.
 
 **Severity.** medium
 
@@ -726,5 +732,74 @@ log line).
 so the marker is a second copy; a replay that re-mints the secret, so
 a retry of a delivered response mints a credential nobody asked for; a
 replay with no header saying the secret is absent.
+
+**Severity.** high
+
+## NET-32 A process bounds what it has in flight and refuses past it
+
+**Principle.** A process bounds the requests it has in flight and
+refuses at once past the bound, in the unavailable shape, rather than
+queueing without end. It is not the rate limit beside it: a rate limit
+is per-subject fairness and fails open, admission is the process
+defending itself and fails closed.
+
+**Source.** The Network Layer, The Gateway (Rate limits, Admission).
+
+**Look for.** The middleware or dependency that counts what is in
+flight and the settings field carrying the bound; what a refusal
+answers with; the rate-limit dependency beside it and how the two are
+told apart.
+
+**Violation.** A process that accepts whatever arrives, so load turns
+into a queue of requests whose callers have gone; an admission bound
+that fails open like a rate limit, or a rate limit pressed into
+service as one; a bound hard-coded instead of read from settings; a
+refusal presented as a 500.
+
+**Severity.** medium
+
+## NET-33 A retry is classified, bounded, and never stacked
+
+**Principle.** Only a failure that can differ on a second attempt is
+retried, bounded in count and spaced by a delay that grows and carries
+jitter, from settings. Retries do not stack: one layer of the chain
+owns them, because a retry under a retry multiplies the load on a
+dependency already failing.
+
+**Source.** The Network Layer, Direction of Calls; Clients Live in One
+Place.
+
+**Look for.** The retry wrapper on each remote client and infra impl:
+which failures it retries, its count, its backoff, and where all three
+come from; every other layer of the same call chain, the client app's
+transport and a worker's handler included.
+
+**Violation.** A retry on a failure that cannot differ, so a
+validation failure or a refusal is sent again; a fixed delay with no
+jitter, so every caller returns together; a retry wrapper under
+another retry, or a caller that retries what its transport already
+retried; a count or a delay hard-coded instead of read from settings.
+
+**Severity.** medium
+
+## NET-34 An issuer key attributes; a declaration of assertions contains
+
+**Principle.** A key per issuer answers who signed, and that is
+attribution. Containment is a declaration per issuer of what it may
+assert: the tenants it may name, the roles it may carry, the
+principals it may speak for. The callee verifies the signature, then
+refuses a credential that reaches past the issuer's declaration.
+
+**Source.** The Network Layer, Intra-Service Communication.
+
+**Look for.** Where a callee verifies an internal credential (NET-27):
+whether it reads a declaration for the issuer that signed before the
+gateway rebuilds the context, and where that declaration is
+configured.
+
+**Violation.** A callee that accepts any tenant, role, or principal
+from any issuer whose signature checks out; a key per issuer presented
+as containment with no declaration behind it; a declaration the issuer
+supplies in its own token, so it widens its own reach.
 
 **Severity.** high

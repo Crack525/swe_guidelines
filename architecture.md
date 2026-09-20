@@ -119,11 +119,13 @@ said here so nobody discovers it in the middle.
   - [What a Process Refuses](#what-a-process-refuses)
 - [Monorepo Folder Structure](#monorepo-folder-structure)
   - [Layout Conventions](#layout-conventions)
-- [Cross-Cutting Conventions](#cross-cutting-conventions)
-  - [Exceptions](#exceptions)
+- [Telemetry](#telemetry)
   - [Logs](#logs)
   - [Traces and Metrics](#traces-and-metrics)
   - [Error Tracking](#error-tracking)
+  - [Correlation Across a Handoff](#correlation-across-a-handoff)
+- [Cross-Cutting Conventions](#cross-cutting-conventions)
+  - [Exceptions](#exceptions)
   - [Configuration](#configuration)
   - [The App Container](#the-app-container)
   - [Records of Decisions](#records-of-decisions)
@@ -132,6 +134,7 @@ said here so nobody discovers it in the middle.
   - [Versions](#versions)
   - [Overriding a Choice](#overriding-a-choice)
 - [Scalability by Design](#scalability-by-design)
+- [Resilience by Design](#resilience-by-design)
 - [What This Document Does Not Cover](#what-this-document-does-not-cover)
 - [Next: An End-to-End Reference Implementation](#next-an-end-to-end-reference-implementation)
 <!-- /toc -->
@@ -591,6 +594,27 @@ holds an inner impl and forwards selectively. Decoration is an
 infrastructure pattern; a manager that needs a cache takes one through
 its constructor rather than wrapping its storage.
 
+A breaker is the wrapper that cuts off a dependency that is failing.
+It counts consecutive failures, refuses at once for a cool-down when
+they pass a bound from settings, and then lets one call through to
+decide whether to close again (the circuit breaker pattern). What it
+is for is the cost of the failures themselves: a dependency that is
+down turns every call into a full timeout, and the timeouts alone are
+what exhaust the pool the calls are made from. It is an infrastructure
+wrapper like the others here, holding an inner impl of the same
+interface, and a manager never holds one.
+
+An open breaker answers the way the dependency's own failure answers,
+because it decorates an interface and a caller cannot tell what is
+behind one. Where that failure is an exception, the refusal is the
+unavailable shape of [Exceptions](#exceptions). Where the interface
+says a failure is an answer, as [Cache](#cache) says an unreachable
+backend is a miss, the breaker gives that same answer at once. It
+declines to pay the timeout, never to keep the contract: a breaker
+that raised where its interface promises a miss would turn a backend
+that is down into a refusal the caller was written not to get, which
+is the outage the miss exists to prevent.
+
 ### Injectability
 
 > **Principle:** Dependencies are injected through constructors and
@@ -646,6 +670,7 @@ class RequestContext(Platform):
     request_id: UUID
     app: AppContext
     trace_id: str | None = None
+    caused_by_request_id: UUID | None = None  # the request behind this one across a handoff
 
 class OpContext(RequestContext):
     security: SecurityContext
@@ -686,9 +711,13 @@ next request, and `opcontext.py`, which also declares `Role`,
 `request_id` is ambient state exactly like identity: minted or accepted
 at the edge, stamped onto the context once, and from there it reaches
 every log line, every audit row, and the error envelope without any
-layer passing it by hand. `ctx.require(Permission.WRITE)` is one line
-at the top of a manager method, which is what keeps authorization in
-the business layer.
+layer passing it by hand. `caused_by_request_id` is the same kind of
+state one hop back: it is empty on a request that arrived at the edge,
+and on a stage minted for a handoff it names the request that caused
+the work (see [Correlation Across a
+Handoff](#correlation-across-a-handoff)). `ctx.require(Permission.WRITE)`
+is one line at the top of a manager method, which is what keeps
+authorization in the business layer.
 
 A context is immutable. Once built, it flows through every downstream
 call unchanged. No layer adds, replaces, or mutates its fields
@@ -785,8 +814,10 @@ The request stage is minted at the edge, once: by the gateway (see [The
 Gateway](#the-gateway)) for every request and every socket, by the
 worker loop per claim and per sweep pass (see [The Work
 Queue](#the-work-queue)), and by the bootstrap command that seeds an
-environment, per command. It carries the request id, the app, and the
-trace, and nothing that names a person.
+environment, per command. It carries the request id, the app, the
+trace, and the request that caused it where a handoff named one (see
+[Correlation Across a Handoff](#correlation-across-a-handoff)), and
+nothing that names a person.
 
 A function that takes a stage relies on its invariant and does not
 check it again: an operation that takes `IdentityContext` does not
@@ -1165,14 +1196,21 @@ surprises.
 -   No user-defined functions in the DB. Every query is written
     explicitly in its storage class.
 -   Tenancy is enforced on every read and checked on every write. A
-    query filters by `org_id`; an upsert refuses to overwrite a row that
-    belongs to another tenant. Row-level security is not a second
-    fence here: on a pooled connection it needs the tenant set per
-    statement, which is the same discipline in a second place, and a
-    policy that misfires returns nothing instead of failing loudly.
-    The fence is `org_id` in every statement and the test that
-    enumerates every exception to it; a project that wants the
-    database to hold a second fence records the decision.
+    query filters by `org_id`; an upsert refuses to overwrite a row
+    that belongs to another tenant. The predicate in the query is the
+    fence, and the cases that present another tenant's identifier
+    (see [Tests](#tests)) are its evidence. Row-level security is a
+    second fence, and independence is what a second fence buys: a
+    database policy and an application predicate fail in different
+    ways, so a policy still constrains a query whose predicate was
+    left out. Enforcement here is in the application, and that choice
+    carries two costs: on a pooled connection the policy needs the
+    tenant set per statement, which is the same discipline in a second
+    place, and a policy that misfires returns nothing instead of
+    failing loudly. A system takes the second fence when the role is
+    held by a process the team does not write, or when a commitment
+    requires enforcement the application cannot vouch for; a project
+    that wants the database to hold it records the decision.
 
 ### Namespace Shape
 
@@ -1187,8 +1225,8 @@ acme/om/inventory/storage/
 ```
 
 The interface exposes read and write operations on domain entities.
-Every operation takes `org_id` as a parameter, so tenancy is enforced at
-every query:
+Every operation takes `org_id` as a parameter, so every query the impl
+writes has the tenant to filter on:
 
 ``` python
 class InventoryStorageInterface(ABC):
@@ -1227,6 +1265,7 @@ class OutboxRow(Identifiable, Created):  # written with the core row, in the sam
     payload: FrozenMapping = Field(default_factory=dict, validate_default=True)
     actor_id: UUID            # the principal of the write it announces; EMPTY_UUID for the platform
     request_id: UUID          # the request that made the write
+    traceparent: str | None = None  # the trace context of that request, for a link
     app: AppContext           # the app that made it
     done_at: datetime | None = None
 ```
@@ -1235,7 +1274,11 @@ It carries its own `org_id` because the relay runs with no context
 (see [Operations Without a
 Principal](#operations-without-a-principal)), and it names the actor,
 the request, and the app of the write it announces, the provenance of
-the [OpContext](#opcontext) that made it.
+the [OpContext](#opcontext) that made it. It carries the trace context
+of that request too, as the `traceparent` header spells it and not as
+`trace_id`, because an id names a trace and only the header carries
+what a later span links to (see [Correlation Across a
+Handoff](#correlation-across-a-handoff)).
 
 Some scopes are strictly user-bound. An order board, where the
 column layout and pinned filters are personal to each user, is not just
@@ -1273,6 +1316,16 @@ as the outbox row below and the `Event` of [Realtime at the
 Edge](#realtime-at-the-edge) do, in which case the row already names
 its tenant and is returned alone. These are the documented exceptions
 to the `org_id`-first rule, and a test enumerates them.
+
+The enumerating test reads signatures. It says which methods take the
+tenant and which are excused from it, and that is all a signature
+says. The fence itself exists in one place, the `WHERE` clause of the
+query, so a method that takes `org_id` and leaves the predicate out of
+its body passes every check made on signatures. What says the tenant
+is used is a case that presents another tenant's identifier and finds
+nothing and changes nothing (see [Tests](#tests)). A new storage
+method arrives with that case the way a new exception arrives with its
+entry in the enumerating test.
 
 ### Storage Root
 
@@ -1491,6 +1544,14 @@ query filters by `org_id` and every write checks it, so a bug in a
 caller cannot move a row across tenants. Each operation opens its own
 short session and commits it; no session outlives the call.
 
+Every statement carries a deadline from settings, because the database
+is a call out of the process like any other and the rule that no call
+goes out without a bound covers it too (see [Clients Live in One
+Place](#clients-live-in-one-place)). When the deadline passes the
+statement is cancelled and surfaces as a failure, so a query that
+hangs costs one call and not a connection held for as long as the
+engine is willing to hold it.
+
 > **Python tip:** when a row must be read and updated atomically by
 > exactly one worker (a queue claim), `SELECT ... FOR UPDATE SKIP
 > LOCKED` inside that one storage method is the whole solution. A
@@ -1548,6 +1609,18 @@ metrics demand it, a role moves to its own database: the schema is
 copied under replication or a dual write until the copy is current,
 and the cut-over is one URL. The copy has a window and a rehearsal;
 the code does not change.
+
+Each role's pool declares its size and the bound on waiting for a
+connection, both from settings. A checkout that waits past the bound
+fails rather than queueing without end, so a role under load surfaces
+as a failure on the call that could not get a connection and never as
+a request that waits for one for good. The size is chosen against the
+process's own concurrency: a worker's capacity (see [Shape of a
+Worker](#shape-of-a-worker)) and the pool it draws on are set
+together, never independently, because a process that runs more work
+at once than its pool serves spends the difference waiting on a
+checkout. The role is the bulkhead between load profiles, and the
+size is how wide it is.
 
 Rules that make the move safe, each checked by a unit test:
 
@@ -1767,6 +1840,15 @@ must be correct is kept only in a cache.
 Caching is a business-layer concern: a storage impl talks to its
 database and nothing else, and caching decisions live in managers,
 where the cost of a stale read is understood.
+
+A degraded answer is declared where it is chosen. Where a read may
+answer from a degraded source, the manager chooses that at the read
+and the answer says so to its caller, so nothing silently substitutes
+a stale answer for a fresh one. The three this document has are each
+named where they live: the cache that fails open here, the limit that
+fails open at [The Gateway](#the-gateway), and the channel that
+degrades to polling in [Push-First Apps](#push-first-apps). A fourth
+is named the same way or it does not exist.
 
 ### Buckets
 
@@ -2180,6 +2262,15 @@ The gateway owns a short list of edge concerns, each done once:
     its path token. A rejection is `429` with `Retry-After` and the
     error envelope. The limits fail open: they guard against runaway
     clients and are not a security boundary.
+-   **Admission.** A process bounds the requests it has in flight and
+    refuses at once past the bound, rather than queueing work it
+    cannot start. That is not the rate limit above, and the two fail
+    in opposite directions: a rate limit is fairness between subjects
+    and fails open, admission is the process defending itself and
+    fails closed. The refusal is the unavailable shape of
+    [Exceptions](#exceptions), so a saturated process fails fast and
+    says why, instead of dying slowly with every caller still waiting
+    on an answer that is no longer coming.
 -   **Edge idempotency.** A creating `POST` accepts an
     `Idempotency-Key` header, and an `IdempotencyMarker`, declared
     after this list, owns the retry. Creating is what the request
@@ -2200,10 +2291,14 @@ The gateway owns a short list of edge concerns, each done once:
     row a failed attempt left instead of creating a second one. The
     table after this list is the whole protocol.
 -   **Health.** `/healthz` answers liveness with the version and no
-    I/O; `/readyz` awaits the storage healthcheck; `/metrics` exposes
-    counters and histograms. All three sit outside the versioned API.
-    The load balancer answers `/metrics` with a 404; only the collector
-    beside the process reads it.
+    I/O; `/readyz` awaits the storage healthcheck under a deadline of
+    its own, shorter than the interval it is polled on, because a
+    probe that waits on the dependency it reports on stops answering
+    exactly when the answer matters: a timeout is a negative answer
+    and never a missing one. `/metrics` exposes counters and
+    histograms. All three sit outside the versioned API. The load
+    balancer answers `/metrics` with a 404; only the collector beside
+    the process reads it.
 -   **Versioning.** The API prefix (`/v1`) is applied once, where
     routers are mounted. Routers declare only their own sub-paths.
 
@@ -2330,6 +2425,17 @@ wider surface, gives each issuing process a key of its own and
 verifies by name, so the callee knows not only that a trusted process
 signed but which one; turning on TLS answers a different question and
 does not narrow who may sign.
+
+A key per issuer is attribution, never containment. It answers which
+process signed; it does not narrow what that process may assert.
+Containment is a second thing, and it is a declaration per issuer of
+what that issuer may assert: the tenants it may name, the roles it may
+carry, and the principals it may speak for. The callee verifies the
+signature, reads the declaration for the issuer that signed, and
+refuses a credential that reaches past it, before the gateway rebuilds
+`OpContext` from it. The declaration is configuration of the callee,
+alongside the keys it verifies against, so an issuer cannot widen its
+own reach by minting a wider token.
 
 Outbound TLS verification uses the operating system's trust store, in
 every process, so a corporate proxy or a private certificate authority
@@ -2534,7 +2640,20 @@ call under the same key. That is what makes the two impls of
 `InventoryServiceInterface` interchangeable in behavior and not only
 in signature: the remote one adds an unknown outcome to every call,
 and the key is what makes a rerun safe, so the signature carries it
-before the split, not after. A chain that must survive a crash
+before the split, not after.
+
+That is the retry that arrives at us. The one we send is classified:
+only a failure that can differ on a second attempt is retried, so a
+timeout, a connection refused, and an unavailable answer are retried
+and a refusal or a validation failure is not. A retry is bounded in
+count and spaced by a delay that grows and carries jitter, both from
+settings. Retries do not stack: one layer of a call chain owns them,
+because a retry under a retry multiplies the load on a dependency that
+is already failing, and what stops the calls that cannot succeed at
+all is a breaker (see [Composition by
+decoration](#composition-by-decoration)) and never another attempt.
+
+A chain that must survive a crash
 between steps is a durable record advanced by a worker (see
 [Long-Running Orchestrations](#long-running-orchestrations)), the
 irreversible step last and a compensating step for each one before it
@@ -2786,6 +2905,8 @@ class WorkItem(Identifiable, Trackable):
     kind: WorkKind             # what to do
     target_id: UUID            # the record it advances
     idempotency_key: UUID      # unique
+    request_id: UUID           # the request that caused the work
+    traceparent: str | None = None   # the trace context of that request, for a link
     payload: FrozenMapping = Field(default_factory=dict, validate_default=True)
     lane: str = "default"      # routing: "default", "region:<id>", ...
     status: WorkStatus         # queued | claimed | done | failed
@@ -2829,6 +2950,15 @@ and the direct create presents its caller's. Either way the two are
 one insert in storage under one key, so a relay that runs twice and a
 caller that retries meet the row already there.
 
+The item's `request_id` is the request that caused the work, and its
+`traceparent` is that request's trace context. Both come from the same
+two places: the relay takes them off the outbox row, which carries the
+request that made the write, and the direct create takes them from its
+caller's context. They are the item's, not the enqueue's, and the
+manager's copy leaves them as constructed. They are what a run names
+as its cause and links its spans to (see [Correlation Across a
+Handoff](#correlation-across-a-handoff)).
+
 Claim is one storage method that selects the oldest available row in
 the named lane, skipping locked ones (competing consumers), and stamps
 the claim and the lease in the same statement. Completion marks the
@@ -2853,9 +2983,13 @@ Because the row carries `created_by`, the worker rebuilds the
 enqueuer's principal under the `Role` reserved for services when it
 claims the item: the loop mints a `RequestContext` per claim, and the
 claim returns the `OpContext` the work runs under (see
-[Stages](#stages)). The context the work runs under names the person who
-asked for it, so attribution and audit survive the asynchronous hop.
-Sweeps that act on every tenant ask the tenancy manager for one service
+[Stages](#stages)). The run gets a `request_id` of its own from that
+stage, and the `OpContext` the claim returns names the item's
+`request_id` as its `caused_by_request_id`, so the work names both the
+request it is and the request that caused it. The
+context the work runs under names the person who asked for it, so
+attribution, audit, and causality survive the asynchronous hop. Sweeps
+that act on every tenant ask the tenancy manager for one service
 context per live tenant.
 
 Authority and attribution are two fields of that context, and they
@@ -3563,62 +3697,13 @@ infrastructure jobs.
 > standard-library module of the same name. Pick a product-specific
 > root package name; the layout is what matters, not the word.
 
-## Cross-Cutting Conventions
+## Telemetry
 
-A short set of conventions that apply across the whole system.
-
-### Exceptions
-
-Every exception raised inside the platform is rooted at
-`PlatformException`. The root carries the two things a boundary needs
-to present it: a status and a stable machine-readable code. Infra
-imports nothing from the OM, so it has a root of its own,
-`InfraException`, with the same two fields, and the gateway and the
-worker loop present both alike; a boundary that must translate one
-into the other does it by those fields, never by catching a name from
-the other side. A small
-set of shape exceptions covers almost every case, and a namespace that
-needs its own family multiply-inherits a shape so the status comes
-along:
-
-``` python
-class PlatformException(Exception):
-    """Root of every exception raised inside the platform."""
-
-    http_status: int = 500
-    code: str = "platform_error"
-
-class NotFound(PlatformException):
-    http_status = 404
-    code = "not_found"
-
-class Conflict(PlatformException):
-    http_status = 409
-    code = "conflict"
-
-class ValidationFailed(PlatformException):
-    http_status = 422
-    code = "validation_failed"
-
-class NotAuthenticated(PlatformException):
-    http_status = 401
-    code = "not_authenticated"
-
-class NotAuthorized(PlatformException):
-    http_status = 403
-    code = "not_authorized"
-
-class OrdersException(PlatformException): ...
-
-class OrderAlreadyShipped(OrdersException, Conflict): ...
-```
-
-The shape has two uses. A caller at a boundary (gateway handler, worker
-loop, test harness) catches `PlatformException` and knows the failure is
-domain-originated and not a runtime crash. Translation to an HTTP
-response happens at that boundary, in one handler, using the status
-and code the exception carries. Managers raise domain exceptions and
-never format HTTP.
+What a process emits is part of its shape. Every process logs the same
+way, raises its spans through the same tracer, counts through the same
+endpoint, and reports its errors to the same tracker, and one id joins
+what they emit so a reader follows one request across every process it
+touched.
 
 ### Logs
 
@@ -3640,6 +3725,13 @@ human-readable locally, switched by an env flag. The request id is
 attached through a logging filter that reads a context variable set at
 the entry point that builds the context, so operations never need to
 remember to include it.
+
+Every line carries the service and the environment it came from, which
+is what lets one query read across processes, the request id, and the
+request that caused it where a handoff supplied one (see [Correlation
+Across a Handoff](#correlation-across-a-handoff)). The filter that
+attaches them is configured once, with the rest of the logging setup,
+so no call site chooses.
 
 > **Principle:** Python's `logging` is the platform logger. Every module
 > uses it; no module replaces it.
@@ -3687,6 +3779,113 @@ nothing.
 > **Principle:** Every process reports errors, the browser app
 > included. Reporting turns on when a DSN is set and never blocks a
 > boot.
+
+### Correlation Across a Handoff
+
+A handoff carries the request that caused it. One id joins the
+request, the row it wrote, the item it queued, and the run that
+followed, so a reader holding a request id follows the work it set off
+past the boundary it crossed instead of stopping at the edge of the
+queue.
+
+The stage a worker runs a claim under is a new request: the run has
+its own lifetime, its own failures, and its own `request_id`, minted
+for the claim. It names the request that caused the work in a second
+field, `caused_by_request_id`, which the claim reads off the work item
+(see [The Work Queue](#the-work-queue)). The two are different fields
+and both reach every log line. Neither is written over the other,
+because a reader asks two questions of a run: what happened in it, and
+what asked for it.
+
+The handoff carries the trace context of the causing request beside
+its id, as a `traceparent` and not as a `trace_id`: an id names a
+trace, and a span links to a span, so the field that crosses is the
+header the causing request held. It rides the outbox row (see
+[Namespace Shape](#namespace-shape)) and the work item, and it is
+empty when the causing request ran with no tracer configured, which is
+the no-op tracer of [Traces and Metrics](#traces-and-metrics) reaching
+the row; the far side then starts a trace of its own and nothing else
+changes.
+
+The span a run raises links to that trace context rather than becoming
+its child. A durable queue holds an item as long as it holds it, well
+past the end of the request that filled it, so the causal edge is a
+link between two traces and not one trace stretched over both.
+
+> **Principle:** A handoff carries the request that caused it and that
+> request's trace context. The stage on the far side is a new request
+> that names the causing one in a field of its own, and the span it
+> raises links to the causing trace.
+
+## Cross-Cutting Conventions
+
+A short set of conventions that apply across the whole system.
+
+### Exceptions
+
+Every exception raised inside the platform is rooted at
+`PlatformException`. The root carries the two things a boundary needs
+to present it: a status and a stable machine-readable code. Infra
+imports nothing from the OM, so it has a root of its own,
+`InfraException`, with the same two fields, and the gateway and the
+worker loop present both alike; a boundary that must translate one
+into the other does it by those fields, never by catching a name from
+the other side. A small
+set of shape exceptions covers almost every case, and a namespace that
+needs its own family multiply-inherits a shape so the status comes
+along:
+
+``` python
+class PlatformException(Exception):
+    """Root of every exception raised inside the platform."""
+
+    http_status: int = 500
+    code: str = "platform_error"
+
+class NotFound(PlatformException):
+    http_status = 404
+    code = "not_found"
+
+class Conflict(PlatformException):
+    http_status = 409
+    code = "conflict"
+
+class ValidationFailed(PlatformException):
+    http_status = 422
+    code = "validation_failed"
+
+class NotAuthenticated(PlatformException):
+    http_status = 401
+    code = "not_authenticated"
+
+class NotAuthorized(PlatformException):
+    http_status = 403
+    code = "not_authorized"
+
+class Unavailable(PlatformException):
+    http_status = 503
+    code = "unavailable"
+
+class OrdersException(PlatformException): ...
+
+class OrderAlreadyShipped(OrdersException, Conflict): ...
+```
+
+`Unavailable` is the shape of a dependency that cannot be reached
+right now: a breaker that is open (see [Composition by
+decoration](#composition-by-decoration)), a request refused past the
+process's admission bound (see [The Gateway](#the-gateway)), a backend
+that is down. Because `InfraException` carries the same two fields,
+the infra side answers with the same status and the same code, and a
+caller that must react reads the code rather than the class it came
+from.
+
+The shape has two uses. A caller at a boundary (gateway handler, worker
+loop, test harness) catches `PlatformException` and knows the failure is
+domain-originated and not a runtime crash. Translation to an HTTP
+response happens at that boundary, in one handler, using the status
+and code the exception carries. Managers raise domain exceptions and
+never format HTTP.
 
 ### Configuration
 
@@ -3793,6 +3992,25 @@ not only called: a contract case runs two callers at once against a
 claim, a take-over, a ticket redemption, and asserts that exactly one
 wins, over memory and over the engine, because a statement whose whole
 purpose is a race is not proven by a sequence.
+
+Tenant isolation is proven by the case that tries the breach. A
+contract case calls a storage method under one tenant with another
+tenant's identifier and asserts that it finds nothing and changes
+nothing. The cases cover reads and writes, the list and the page, the
+bulk write that takes many ids at once, and the failure paths where a
+method returns early or raises, since a path that skips the query
+skips the fence with it. A new storage method arrives with its case,
+over memory and over the engine, because the fence lives in the query
+and the signature says only that the tenant was offered (see
+[Namespace Shape](#namespace-shape)).
+
+The isolation suite is verified against a deliberate breach. What such
+a suite is worth is what it catches, so a tenant predicate is taken
+out of one query, the suite is run and fails, and the predicate is put
+back. What that run showed is recorded, the query it was run against
+and what the suite reported, because a negative control nobody ran is
+a claim and not evidence. Which mechanism takes the predicate out is
+the project's choice; that the control is run and recorded is not.
 
 ## Technology Choices and How to Override Them
 
@@ -3947,6 +4165,58 @@ outage:
 -   A replica count that exhausts the pool of a role puts a pooler in
     front of that role; that is a URL.
 
+## Resilience by Design
+
+Staying up while something downstream is failing is not one section's
+concern. It is what the bounds in this document add up to, each stated
+where the call is made, so that a process under load refuses work
+instead of dying with it. The bounds that make it so:
+
+-   [Every outbound call carries a
+    timeout](#clients-live-in-one-place) from settings, the gateway
+    bounds a request with a deadline, and [every statement carries
+    one](#a-storage-impl), so nothing a process waits on is unbounded.
+-   [Each database role's pool](#database-roles) declares its size and
+    the bound on waiting for a connection, so a saturated role fails a
+    checkout instead of queueing without end.
+-   [A process bounds what it has in flight](#the-gateway) and refuses
+    past the bound at once, which is the process defending itself and
+    not the rate limit beside it.
+-   [A breaker](#composition-by-decoration) cuts off a dependency that
+    is failing, so the timeouts of a dependency that is down do not
+    exhaust the pool they are made from.
+-   [A retry is classified and never stacked](#direction-of-calls):
+    only a failure that can differ is retried, bounded in count and
+    spaced by a delay that grows and carries jitter.
+-   [A worker claims within its capacity](#shape-of-a-worker) and
+    stops claiming when its heartbeats fail, and [resumes are
+    staggered](#maintenance-without-a-scheduler), so a dependency
+    coming back is not met by every parked record at once.
+-   [A lane on the work queue](#the-work-queue) carries a tenant whose
+    bulk work starves its neighbours, and each [database
+    role](#database-roles) has its own pool, so one load profile
+    cannot take the rest down with it.
+-   [The send buffer per socket](#realtime-at-the-edge) is bounded and
+    drops the oldest frame, and [the channel degrades to
+    polling](#push-first-apps) rather than disappearing.
+-   [A readiness probe](#the-gateway) answers under a deadline of its
+    own: a timeout is a negative answer, never a missing one.
+-   [A guard parks, a bound fails](#long-running-orchestrations), so a
+    dependency that is unavailable right now leaves the work
+    resumable.
+-   [A degraded answer is declared where it is chosen](#cache), so
+    nothing silently substitutes a stale answer for a fresh one.
+-   [One shape exception](#exceptions) presents an open breaker, a
+    refused admission, and a backend that is down alike, so a caller
+    reads one code for "not right now".
+
+Every bound here is a shape: that it exists, that it is named in
+settings, and what happens when it is reached. What each one is set to
+is not, and belongs to the system that runs it, since the numbers
+follow from a service objective and the capacity behind it and a
+number that fit every system would say nothing (see [What This
+Document Does Not Cover](#what-this-document-does-not-cover)).
+
 ## What This Document Does Not Cover
 
 This is a document about the shape of a system: which layer owns what,
@@ -3956,10 +4226,11 @@ team makes per system, once the shape holds and the numbers are known,
 and a rule that fit every system would say nothing: a threat model and
 the rotation of secrets and keys; service objectives, alerting, and
 the on-call posture behind them; the tuning of deadlines and retry
-budgets, and admission under overload; disaster recovery beyond the
-backup and rehearsed restore of each role, and multi-region; tenant
-export and offboarding; load testing; the deprecation of an API
-version; and supply-chain rules such as dependency scanning.
+budgets, and the numbers an admission bound is set to; disaster
+recovery beyond the backup and rehearsed restore of each role, and
+multi-region; tenant export and offboarding; load
+testing; the deprecation of an API version; and supply-chain rules
+such as dependency scanning.
 
 The shape
 is what makes each of them tractable when its time comes: one settings

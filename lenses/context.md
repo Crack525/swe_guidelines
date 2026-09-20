@@ -6,8 +6,10 @@ of Layers, the
 authorization step and parameter order of The Business Layer and its
 "Operations Without a Principal", the tenancy rules of The Storage
 Layer, the tenant keying of Infrastructure, the credential and
-operator concerns of The Gateway in The Network Layer, and the worker
-context provenance of Worker Roles.
+operator concerns of The Gateway in The Network Layer, the worker
+context provenance of Worker Roles, the causing request a handoff's
+stage names in Telemetry, and the tenant isolation suite and its
+negative control in the Tests of Cross-Cutting Conventions.
 
 This group judges one question: does every operation know who is
 acting, for which tenant, with what authority, and is that knowledge
@@ -45,12 +47,12 @@ handoffs included, is CTX-16's to judge.
 
 ## CTX-02 The context carries ids and facts, never entities
 
-**Principle.** The security context holds `user_id`, `org_id`, the
-role, the permissions, the teams, the credential kind, and
-`credential_id`: ids and facts, never entities. The app context holds
-the app type and version. The request stage holds the request id, the
-app, and an optional trace id, which every stage above inherits and
-every log line, audit row, and error envelope reads.
+**Principle.** The security context holds `user_id`, `org_id`, role,
+permissions, teams, credential kind, and `credential_id`: ids and
+facts, never entities. The app context holds the app type and version.
+The request stage holds the request id, the app, the optional trace,
+and the causing request, which every stage above inherits and every log
+line, audit row, and error envelope reads.
 
 **Source.** OpContext; OpContext, Stages.
 
@@ -167,7 +169,7 @@ changed.
 thread locals, or hidden lookups. Everything ambient flows through the
 context.
 
-**Source.** OpContext; Cross-Cutting Conventions, Logs.
+**Source.** OpContext; Telemetry, Logs.
 
 **Look for.** Module-level globals holding a current user, tenant, or
 request; thread-local or context-variable reads of identity, tenant,
@@ -205,11 +207,11 @@ permissions.
 ## CTX-09 Tenancy is enforced in storage on read and checked on write
 
 **Principle.** Tenancy is a data boundary. Every storage query filters
-by the tenant, and every write refuses to overwrite a row that belongs
-to another tenant. That statement-level fence, with the test that
-enumerates every exception to it, is the fence; row-level security is
-not a second one here, and a project that wants it records the
-decision.
+by the tenant, and every write refuses to overwrite another tenant's
+row. The predicate in the query is the fence; the cross-tenant cases
+are its evidence (CTX-30). A database policy is the second fence,
+taken and recorded when the role is held by a process the team does
+not write.
 
 **Source.** Separation of Layers; The Storage Layer, Storage Principles;
 A Storage Impl.
@@ -271,7 +273,8 @@ the same tenant.
 to the tenant-first rule: a global method takes no tenant and says why
 in its docstring; a bookkeeping sweep with no principal gets the
 tenant back with each row, as `tuple[UUID, Entity]` or on an entity
-carrying `org_id` itself; a test enumerates them.
+carrying `org_id` itself; a test enumerates them, reading signatures
+and nothing more (CTX-30).
 
 **Source.** The Storage Layer, Namespace Shape; The Business Layer,
 Operations Without a Principal.
@@ -647,5 +650,70 @@ routes; an identity keyed on an email the provider may reassign; a
 second session or membership model for federated users; a tenant
 manager that branches on the provider; no local twin, so the sign-in
 cannot run without the network.
+
+**Severity.** high
+
+## CTX-29 A handoff's context names the request that caused it
+
+**Principle.** The stage minted on the far side of a handoff is a new
+request with its own `request_id`, and it names the request that caused
+the work in `caused_by_request_id`, read off the work item. The two are
+separate fields, both inherited by every stage above and both logged,
+and neither is written over the other.
+
+**Source.** Telemetry, Correlation Across a Handoff; OpContext, Stages.
+
+**Look for.** The worker loop's mint per claim and per sweep pass and
+what it reads off the item; the request stage's fields; the log records
+a run emits and which of the two ids each carries.
+
+**Violation.** A claim context that carries the item's request id as
+its own `request_id`, so the run and its cause are one id; a mint that
+drops the causing id, so a run names no cause; a run whose lines carry
+one of the two and not both. (The field on the item is ASY-29.)
+
+**Severity.** medium
+
+## CTX-30 A cross-tenant case proves what a signature only offers
+
+**Principle.** The fence is the predicate in the query, so a signature
+test says only that the tenant was offered. Every storage method has a
+case that passes another tenant's identifier and asserts that nothing
+is found and nothing changes: reads and writes, the list and the page,
+the bulk write, the failure paths. A new method arrives with its case.
+
+**Source.** The Storage Layer, Namespace Shape; Cross-Cutting
+Conventions, Tests.
+
+**Look for.** The contract cases behind each storage interface: which
+methods have a case under another tenant's identifier, and whether the
+list, the page, the bulk write, and the paths that return early or
+raise are among them; the body of each query beside its signature.
+
+**Violation.** A method that takes `org_id` and writes a query without
+it, which the enumerating test of CTX-12 cannot see; a cross-tenant
+case on the single read alone, with the list, the page, or the bulk
+write untried; a storage method added with no case of its own.
+
+**Severity.** high
+
+## CTX-31 The isolation suite is verified against a deliberate breach
+
+**Principle.** An isolation suite is worth what it catches, so a tenant
+predicate is taken out of one query, the suite is run and fails, and
+the predicate is put back. What the run showed, the query and what the
+suite reported, is recorded. Which mechanism takes the predicate out
+is the project's choice; that the control is run is not.
+
+**Source.** Cross-Cutting Conventions, Tests.
+
+**Look for.** The record of the last such run against the tenant
+isolation cases (CTX-30): which query lost its predicate, what the
+suite reported, and when.
+
+**Violation.** An isolation suite whose worth rests on its existence,
+with no run that removed a predicate; a run made and not recorded, so
+the next reader takes it on trust; a record showing the suite still
+passed with the predicate gone and nothing done about it.
 
 **Severity.** high

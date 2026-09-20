@@ -6,6 +6,163 @@ which number.
 
 ## Unreleased
 
+## 0.17.0 (2026-09-20)
+
+Three outside readings of the operational half of the guideline: that
+telemetry is treated as a convention rather than as structure, that
+resilience under degradation is thin, and that the tenant fence claims
+more than convention and a signature test establish. Minor: rules are
+added and sharpened, none is removed or reversed. Telemetry becomes a
+section of its own and a handoff carries the request that caused it,
+so a reader holding a request id follows the work past the queue it
+crossed. Every call gains a bound and a named behaviour at the bound,
+each stated where the call is made and gathered by "Resilience by
+Design", with the numbers left to the system that runs it. The tenant
+fence keeps its decision and states what actually holds it: the
+predicate is the fence, the case that presents another tenant's
+identifier is its evidence, and the suite is verified against a
+deliberate breach.
+
+### Added
+
+- `architecture.md`, "Composition by decoration": an open breaker
+  answers the way the dependency's own failure answers. It decorates
+  an interface, and a caller cannot tell what is behind one, so where
+  the interface says a failure is an answer, as "Cache" says an
+  unreachable backend is a miss, the breaker gives that answer at once
+  instead of raising. It declines to pay the timeout, never to keep
+  the contract. Where the failure is an exception the refusal is still
+  the unavailable shape. Lens `CON-23`.
+
+- `architecture.md`, "Namespace Shape" and "Tests": a signature is not
+  a guarantee, and the case that tries the breach is what says the
+  tenant is used. The test that enumerates the exceptions to the
+  `org_id`-first rule reads signatures, and the fence itself lives in
+  one place, the `WHERE` clause of the query, so a method that takes
+  the tenant and leaves the predicate out of its body passes every
+  check made on signatures. "Tests" names the coverage the
+  cross-tenant cases owe: reads and writes, the list and the page, the
+  bulk write, and the paths that return early or raise, over memory
+  and over the engine, with a new storage method arriving with its
+  case. Lens `CTX-30`; `CTX-12` now says the enumerating test reads
+  signatures and nothing more. `arch-scaffold-entity` generates the
+  cross-tenant case per method of an entity's storage interface,
+  `arch-scaffold-worker` the one its tenant-carrying method owes,
+  `arch-scaffold-new` names the enumerating test as a signature check,
+  and the shared scaffold conventions carry the rule.
+- `architecture.md`, "Tests": the isolation suite is verified against a
+  deliberate breach. A tenant predicate is taken out of one query, the
+  suite is run and fails, the predicate is put back, and what that run
+  showed is recorded, the query it was run against and what the suite
+  reported, because a negative control nobody ran is a claim and not
+  evidence. Which mechanism takes the predicate out is the project's
+  choice; that the control is run and recorded is not. Lens `CTX-31`.
+- `architecture.md`, "Intra-Service Communication": a key per issuer is
+  attribution, never containment. One signing key stays one trust
+  domain, and the system that gives each issuing process a key of its
+  own learns which process signed; what bounds an issuer is a
+  declaration of what it may assert, the tenants it may name, the
+  roles it may carry, and the principals it may speak for, which the
+  callee reads before the gateway rebuilds `OpContext` and against
+  which it refuses a credential that reaches past. The declaration is
+  configuration of the callee, so an issuer cannot widen its own reach
+  by minting a wider token. Lens `NET-34`; `NET-27` keeps the token's
+  shape.
+- `architecture.md`, "Correlation Across a Handoff": a handoff carries
+  the request that caused it, so one id joins the request, the row it
+  wrote, the item it queued, and the run that followed. The stage a
+  worker mints for a claim is a new request that names the causing one
+  in a field of its own, both are logged, and a span raised on the far
+  side links to the causing trace rather than becoming its child,
+  because a durable queue holds an item past the end of the request
+  that filled it. `WorkItem` gains `request_id` and `traceparent`, and
+  `OutboxRow` gains `traceparent` beside the request id it already
+  carried: the trace context as the header spells it and not as a
+  `trace_id`, since an id names a trace and only the header carries
+  what a later span links to. A traceparent is empty when the causing
+  request ran with no tracer configured, and the far side then starts
+  a trace of its own. The relay takes both fields off the outbox row
+  and a direct create off its caller's context, and `RequestContext`
+  gains `caused_by_request_id`, which the claim's transition fills
+  from the item. "Logs" says what every line carries: the service and
+  the environment, which is what lets one query read across processes,
+  the request id, and the causing request where a handoff supplied
+  one. Lenses `CTX-29`, `ASY-29`, `DEL-39`; `CTX-02`
+  names the field the request stage gained, `OM-03` the field the
+  outbox row gained; `arch-scaffold-new`, `arch-scaffold-worker`, and
+  the shared scaffold conventions carry the shape.
+- `architecture.md`, "Resilience by Design": a bound on every call and
+  a named behaviour at the bound, each rule stated beside the
+  mechanism it bounds and gathered into a section that is the sibling
+  of "Scalability by Design". "Database Roles": a role's pool declares
+  its size and the bound on waiting for a connection, both from
+  settings, and a checkout past the bound fails rather than queueing
+  without end, with the size chosen against the process's own
+  concurrency. "A Storage Impl": a statement carries a deadline, so
+  the one dependency the timeout doctrine never named is bounded like
+  every other call, and a hung query costs one call and not a held
+  connection. "The Gateway": `/readyz` answers under a deadline of its
+  own, shorter than the interval it is polled on, and a timeout is a
+  negative answer and never a missing one; a process bounds what it
+  has in flight and refuses past the bound at once, which is the
+  process defending itself and fails closed, where the rate limit
+  beside it is per-subject fairness and fails open. "Composition by
+  decoration": a breaker counts consecutive failures, refuses for a
+  cool-down past a bound from settings, and lets one call through to
+  decide whether to close, because a dependency that is down turns
+  every call into a full timeout and the timeouts exhaust a pool.
+  "Direction of Calls": the retry we send is classified, bounded in
+  count, spaced by a delay that grows and carries jitter, and never
+  stacked. "Cache": a degraded answer is declared where it is chosen,
+  so nothing silently substitutes a stale answer for a fresh one.
+  "Exceptions" gains the `Unavailable` shape with the status it
+  carries, so an open breaker, a refused admission, and a backend that
+  is down present alike on both exception roots. Every rule states the
+  shape of a bound and never a number: "What This Document Does Not
+  Cover" keeps excluding the tuning of deadlines and retry budgets and
+  now excludes the numbers an admission bound is set to. Lenses
+  `STO-27`, `NET-32`, `NET-33`, `CON-23`, `ASY-30`; `NET-26` carries
+  the statement deadline, `NET-10` the bounded readiness probe, and
+  `DEL-18` the new shape. The scaffolds carry the shape:
+  `arch-scaffold-new` writes the shape exception and a storage root
+  whose pools declare a size and a checkout bound and whose sessions
+  carry a statement deadline; `arch-scaffold-service` writes the
+  admission middleware, the bounded readiness probe, the breaker the
+  container wires in front of a remote service impl, and the settings
+  behind all three; `arch-scaffold-app` puts the one retry in the
+  transport client, in both languages, with nothing retrying above it;
+  and `arch-scaffold-worker` sets a worker's capacity against the pool
+  behind it.
+
+### Changed
+
+- `architecture.md`, "Storage Principles": the row-level security
+  bullet is argued on strength and not on cost alone. The predicate in
+  the query is the fence and the cross-tenant cases are its evidence;
+  a database policy is the second fence, and independence is what a
+  second fence buys, since a policy and a predicate fail in different
+  ways and a policy still constrains a query whose predicate was left
+  out. The decision stays application enforcement, and both costs stay
+  stated: the tenant set per statement on a pooled connection, which
+  is the same discipline in a second place, and a policy that misfires
+  returning nothing instead of failing loudly. The bullet names the
+  trigger at which a system takes the second fence, a role held by a
+  process the team does not write or a commitment requiring
+  enforcement the application cannot vouch for, and a project that
+  wants the database to hold it still records the decision.
+  "Namespace Shape" no longer reads the `org_id` parameter as
+  enforcement in itself. Lens `CTX-09`.
+- `architecture.md`, "Telemetry": "Logs", "Traces and Metrics", and
+  "Error Tracking" leave "Cross-Cutting Conventions" for a top-level
+  section of their own, placed in front of it, so that what every
+  process emits reads as structure and not as a convention added at
+  the edge. The three subsections keep their text, and
+  "Cross-Cutting Conventions" keeps "Exceptions", "Configuration",
+  "The App Container", "Records of Decisions", and "Tests". Lenses
+  `CTX-07`, `DEL-19`, `DEL-20`, `DEL-27`, and `DEL-35` cite the new
+  section, the `delivery` group's home sections name it, and
+  `arch-review-delivery` is regenerated.
+
 ## 0.16.0 (2026-09-20)
 
 A second reading of 0.14.0, triaged against 0.15.0, for the places

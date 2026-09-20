@@ -2,9 +2,9 @@
 
 Group id: `delivery`. Covers Apps (Apps as Products, Apps Are Dumb),
 Deployment, Monorepo Folder Structure, Client App Architecture (except
-the realtime channel rule), Cross-Cutting Conventions (except The App
-Container), and Technology Choices and How to Override Them of
-`architecture.md`.
+the realtime channel rule), Telemetry (except Correlation Across a
+Handoff), Cross-Cutting Conventions (except The App Container), and
+Technology Choices and How to Override Them of `architecture.md`.
 
 This group judges how the system reaches people and machines: the
 apps at the edge, the repository they are built from, the environments
@@ -14,7 +14,12 @@ rules (one channel per app, envelopes, degraded mode) to `network`,
 the app container boot order to `contracts`, and the operator
 console's gating (the allowlist, the refusal of a tenant role or a
 portal flag) with the credential rules behind it to `context`
-(CTX-20).
+(CTX-20). The tenant isolation suite in Tests, and the negative
+control that proves it catches a breach, it leaves to `context`
+(CTX-30, CTX-31), which owns the tenancy evidence end to
+end. What a handoff carries across a process boundary, the
+causing request and the link from a run's span to the causing trace,
+it leaves to `context` (CTX-29) and `async` (ASY-29).
 
 ## DEL-01 Apps are dumb, and logic lands in the layer it belongs to
 
@@ -395,9 +400,9 @@ ignores the OS's.
 **Principle.** Every platform exception is rooted at
 `PlatformException`, which carries `http_status` and a stable `code`.
 Shape exceptions (`NotFound`, `Conflict`, `ValidationFailed`,
-`NotAuthenticated`, `NotAuthorized`) cover most cases; a namespace
-family multiply-inherits a shape. Translation to HTTP happens once, at
-the boundary. Managers never format HTTP.
+`NotAuthenticated`, `NotAuthorized`, `Unavailable`) cover most cases;
+a namespace family multiply-inherits a shape. Translation to HTTP
+happens once, at the boundary. Managers never format HTTP.
 
 **Source.** Cross-Cutting Conventions, Exceptions.
 
@@ -410,7 +415,9 @@ routers.
 neither `PlatformException` nor, under infra, `InfraException`
 (DEL-29); a manager raising a framework HTTP exception; a router
 mapping exception types to status codes; a raised leaf exception that
-inherits no shape and so surfaces as 500.
+inherits no shape and so surfaces as 500; an open breaker, a refused
+admission, or a backend that is down presented as a 500 instead of the
+unavailable shape.
 
 **Severity.** medium
 
@@ -421,7 +428,7 @@ Formatting, level, and sink are configured once at boot, JSON in cloud
 and readable locally. Correlation fields reach every line through a
 filter reading a context variable set where the context is built.
 
-**Source.** Cross-Cutting Conventions, Logs.
+**Source.** Telemetry, Logs.
 
 **Look for.** Logging setup in the boot path; per-module logger
 creation; any second logging library; how the request id reaches log
@@ -442,8 +449,8 @@ runs and the code paths stay identical. Metrics are exposed on
 Observability is used through its vendor API, as a feature flag SDK
 is (DEL-22); the backend is a config detail.
 
-**Source.** Cross-Cutting Conventions, Traces and Metrics;
-Infrastructure, Infrastructure Principles.
+**Source.** Telemetry, Traces and Metrics; Infrastructure,
+Infrastructure Principles.
 
 **Look for.** Tracing and metrics setup; a platform module that
 re-exposes spans, counters, or histograms under its own names; code
@@ -605,7 +612,7 @@ events tagged with service, release, and request id. Reporting is off
 until a DSN is set (empty or `off` means unset), and a missing tracker
 never stops a boot.
 
-**Source.** Cross-Cutting Conventions, Error Tracking.
+**Source.** Telemetry, Error Tracking.
 
 **Look for.** SDK initialization in each process's boot path; the tags
 set on events; how the DSN setting is read and what an empty or `off`
@@ -794,7 +801,7 @@ outcome, never an id. Every process serves `/metrics`, workers
 included; a worker has no API, so it serves `/metrics` and `/healthz`
 alone on its own small port.
 
-**Source.** Cross-Cutting Conventions, Traces and Metrics.
+**Source.** Telemetry, Traces and Metrics.
 
 **Look for.** The request counter and its labels; the counters
 declared next to each queue, cache, and rate limit; the labels each
@@ -876,5 +883,26 @@ production apply with no plan approved first; a deploy of production
 that plans without checking that `release` is an ancestor of `main`;
 a person or a job that can push to `release` other than the
 fast-forward.
+
+**Severity.** medium
+
+## DEL-39 Every log line names its service, its environment, and its request
+
+**Principle.** Every log line carries the service and the environment
+it came from, which is what lets one query read across processes, the
+request id, and the request that caused it where a handoff supplied
+one.
+
+**Source.** Telemetry, Logs.
+
+**Look for.** The fields the boot's formatter and filter put on every
+record; a worker's log lines beside the request that enqueued its
+work; any call site that passes one of these fields by hand.
+
+**Violation.** Lines with no service or environment, so a query cannot
+read across processes; a worker's lines that name no causing request,
+so nothing joins them to the request behind the work; a request id on
+the gateway's lines and absent from the worker's. (The filter that
+attaches them is DEL-19.)
 
 **Severity.** medium

@@ -604,3 +604,48 @@ check; a local impl that reaches a network store; the cloud impl
 reading a file.
 
 **Severity.** low
+
+## ASY-29 The work item carries the request that caused it
+
+**Principle.** A work item carries the request that caused it and that
+request's trace context, a `traceparent` and not a `trace_id`: the
+relay takes both off the outbox row of the write, a direct create off
+its caller's context. The span the run raises links to that trace
+context rather than becoming its child.
+
+**Source.** Worker Roles, The Work Queue; Telemetry, Correlation
+Across a Handoff.
+
+**Look for.** The work item type and the columns behind the two
+fields; both enqueue paths, the relay's build from `(org_id, row)` and
+the direct create, and where each reads them; what the span a handler
+raises is linked to, and what it does when the item's traceparent is
+empty.
+
+**Violation.** A work item with no request id or no traceparent, so
+the trail ends at the queue or the link has nothing to point at; a
+relayed enqueue that mints either afresh instead of taking the row's;
+a run whose span starts an unlinked trace, or one that runs as a child
+of the causing span, stretching one trace across the queue.
+
+**Severity.** medium
+
+## ASY-30 A degraded answer is declared at the read, never silent
+
+**Principle.** Where a read may answer from a degraded source, the
+degradation is chosen at that read and visible to its caller: a cache
+that fails open, a limit that fails open, a channel that degrades to
+polling. Nothing silently substitutes a stale answer for a fresh one.
+
+**Source.** Infrastructure, Cache.
+
+**Look for.** Every read that can answer without its source: what a
+manager does when the cache backend is unreachable and what its caller
+learns; any fallback path inside a storage impl or a service impl.
+
+**Violation.** A read that falls back to a stale or partial source and
+returns it as if it were fresh; a fallback buried in an impl, where
+the manager that owns the cost of a stale read cannot see it; a caller
+with no way to tell a degraded answer from a fresh one.
+
+**Severity.** medium

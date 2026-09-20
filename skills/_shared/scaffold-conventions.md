@@ -98,7 +98,8 @@ the order the guideline presents them, never by number.
   handoff that takes `(org_id, row)`, global tables, cross-tenant
   sweeps), each documented in its docstring and listed in the
   repository's exceptions test, which also names every method that
-  takes the request stage.
+  takes the request stage. That test reads signatures; what says the
+  tenant is used is the cross-tenant case beside each method, below.
 - Every interface is an `ABC` whose methods are `@abstractmethod` with
   `...` bodies; every impl subclasses it; every dependency is a
   constructor parameter typed by interface.
@@ -107,7 +108,12 @@ the order the guideline presents them, never by number.
   `tests/unit/` runs them against the memory impl and one under
   `tests/integration/` runs the same cases against Postgres under the
   `integration` marker. Both impls sort by the `UUID` value, never by
-  its string.
+  its string. Every storage method gets a case that passes another
+  tenant's identifier and asserts that nothing is found and nothing
+  changes: reads and writes, the list and the page, the bulk write,
+  and the paths that return early or raise. A method added later
+  arrives with its case, as The Storage Layer (Namespace Shape) and
+  Cross-Cutting Conventions (Tests) state.
 - One manager impl, unless the namespace fronts something a caller
   cannot conjure (a payment processor, a carrier, a model provider).
   Then it gets a memory impl of its own, `<Ns>ManagerMemoryImpl`,
@@ -140,8 +146,8 @@ the order the guideline presents them, never by number.
   lands the core row and its `OutboxRow`s in one storage method,
   `outbox_rows: tuple[OutboxRow, ...]`, and the manager relays each at
   once; a row comes from `outbox_row(ctx, kind,
-  target_id, payload)`, so it carries the actor, the request id, and
-  the app of the write. The caller constructs the entity whole and hands it to
+  target_id, payload)`, so it carries the actor, the request id, the
+  trace context, and the app of the write. The caller constructs the entity whole and hands it to
   `create_<entity>`; the one exception is an entity that carries a
   server-minted secret (an API key), whose `create_` takes the fields
   and returns an `Issued...` shape once, and whose rerun finds the
