@@ -439,7 +439,11 @@ The in-memory impl is the default for unit tests and the fast local
 gate. It keeps state in an in-process dict and exercises real behavior
 without infrastructure. It is a full second implementation: every read,
 write, filter, and tenancy rule the relational impl has, the memory
-impl has too, and the test suite runs both.
+impl has too, and the test suite runs both. The suite proves what it
+exercises: the named atomic methods, uniqueness, the compare-and-set,
+and visibility after a write each have a contract case, or a memory
+impl passes by being lenient where the engine is strict, and the pair
+is then two impls of two contracts.
 
 Technology-specific impls for storage follow the same interface:
 
@@ -695,6 +699,19 @@ whether the membership is live. The stage is the proof. That is what
 keeps authentication from being reconstructed at every layer, and it is
 why the stages are concrete types and not views: a stage is evidence,
 produced in one place, and its exact type says who produced it.
+
+A stage lives as long as the request that minted it and no longer: a
+request, a claim, a sweep pass, a socket. A socket is a request that
+stays open, so it holds the `OpContext` its ticket produced for the
+life of the connection; a membership revoked meanwhile stops the next
+request at `authenticate` and reaches the socket at its next
+reconnect. That is a decision, and what bounds it is what a socket
+carries: hints, never a field of an entity (see [Realtime at the
+Edge](#realtime-at-the-edge)), so the window is one of metadata. A
+product where that window is too long closes the tenant's sockets
+from the operation that revokes. Work that runs later than the
+request that asked for it runs on an authority of its own, which [The
+Work Queue](#the-work-queue) names.
 
 The stages fence capabilities without a second registry. An operation
 declares the weakest stage that proves what it needs, and a caller that
@@ -1027,7 +1044,6 @@ class WarehouseStorageInterface(ABC):
     @abstractmethod
     async def read_warehouse(self, org_id: UUID, warehouse_id: UUID) -> Warehouse | None: ...
     @abstractmethod
-    @abstractmethod
     async def create_warehouse(
         self, org_id: UUID, warehouse: Warehouse, outbox_row: OutboxRow
     ) -> bool: ...  # False when the id is already written; nothing changes then
@@ -1347,10 +1363,17 @@ When reporting is needed it reads a mirror fed by change data capture
 or a periodic copy, never a role the application writes to.
 
 Every role is backed up on its own schedule, and a restore is
-rehearsed, not assumed. A soft-deleted row is purged by the
-maintenance sweep after its entity's retention period; purge is the
-one hard delete. Personal data lives in named fields, so erasing a
-person is a sweep over a list, not a hunt.
+rehearsed, not assumed. A role restored to an earlier point than its
+siblings is reconciled from the outbox, not by hand: the rows relayed
+since that point are relayed again, harmless because the relay is
+idempotent on the row's key, and for an event whose destination role
+was restored past it the outbox row is the one trace it existed. That
+is why a done outbox row is kept for a retention period and purged by
+the sweep, never deleted on done, and why that period outlives the
+backup schedule of the roles the outbox feeds. A soft-deleted row is
+purged by the maintenance sweep after its entity's retention period;
+purge is the one hard delete. Personal data lives in named fields, so
+erasing a person is a sweep over a list, not a hunt.
 
 > **Principle:** Every table has one role; the role is its schema, its
 > pool, and its migration chain. Nothing crosses a role.
@@ -1953,7 +1976,17 @@ and an expiry a few minutes out, signed with a key every process reads
 from the secret store (see [Secrets](#secrets)) and verified by the
 callee against the same key; the callee's gateway rebuilds `OpContext`
 from it like any other credential kind, and no service trusts a bare
-header.
+header. One key is one trust domain: every process that reads it can
+mint a credential naming any principal in any tenant, so the fence
+around that key is the private network and the secret store's access
+list, and a compromised process is a compromised platform, not a
+compromised service. That is a decision, made for a platform whose
+processes are all its own and deployed together. A system that runs a
+process it trusts less, a plugin, a partner's code, a component with a
+wider surface, gives each issuing process a key of its own and
+verifies by name, so the callee knows not only that a trusted process
+signed but which one; turning on TLS answers a different question and
+does not narrow who may sign.
 
 Outbound TLS verification uses the operating system's trust store, in
 every process, so a corporate proxy or a private certificate authority
@@ -2002,11 +2035,21 @@ page envelope (`items` and `next_cursor`) and pages by an opaque
 cursor over the list's own order, which is the id when that order is
 the creation order, since a v7 id sorts by time; an append-only
 stream pages by a monotonic sequence number (`after_seq`); nothing
-pages by an offset. Inside `/v1` a view
-only gains fields and a request only gains optional ones; a removal or
-a rename is a new prefix. Topic payloads and realtime envelopes follow
-the same rule and are read tolerantly: a consumer ignores a field it
-does not know, so producers and consumers roll out in either order.
+pages by an offset. Inside `/v1` a view only gains fields and a
+request only gains optional ones; a removal or a rename is a new
+prefix. Tolerance runs one way, and the deployment order covers the
+other. A reader ignores a field it does not know, which lets an old
+reader take a new writer's output; the reverse, a new reader in front
+of an old writer, holds only when the new field is optional with a
+default the reader applies when it is absent. So a topic payload, a
+work item payload, and a realtime envelope only gain optional,
+defaulted fields: a row written before the deploy has no such field,
+a producer still on the old build sends none, and the two roll out in
+either order because the consumer tolerates both. A request forbids
+what it does not know, so the service that accepts a new optional
+field rolls out before the app that sends it, and an app that reads a
+new field of a view tolerates its absence until every replica serves
+it: a service rolls out before its apps.
 
 > **Python tip:** `from_attributes=True` makes
 > `WarehouseView.model_validate(warehouse)` the whole translation when
@@ -2104,9 +2147,11 @@ class OrderServiceImpl(OrderServiceInterface):
         self._inventory_service = inventory_service
         self._order_manager = order_manager
 
-    async def place_order(self, ctx: OpContext, req: PlaceOrderRequest) -> OrderView:
-        reservation = await self._inventory_service.reserve(ctx, req.lines)
-        order = await self._order_manager.place_order(ctx, req.customer_id, reservation)
+    async def place_order(
+        self, ctx: OpContext, order_id: UUID, req: PlaceOrderRequest
+    ) -> OrderView:
+        reservation = await self._inventory_service.reserve(ctx, order_id, req.lines)
+        order = await self._order_manager.place_order(ctx, order_id, req.customer_id, reservation)
         return OrderView.model_validate(order)
 ```
 
@@ -2114,13 +2159,27 @@ The service impl holds both a service-level dependency
 (`InventoryServiceInterface`) and a manager-level dependency
 (`OrderManagerInterface`), both injected through the constructor. The
 OM order manager receives `reservation` as a plain argument; it has no
-knowledge that a service was called to produce it. A reservation is a
-record with an expiry, so a failed second step leaks nothing past it,
-and the order carries the reservation id so a retry finds it instead
-of reserving twice. A chain that must survive a crash between steps is
-a durable record advanced by a worker (see [Long-Running
-Orchestrations](#long-running-orchestrations)), the irreversible step
-last and a compensating step for each one before it (a saga).
+knowledge that a service was called to produce it. `order_id` is the
+id the gateway minted before the idempotency marker (see [The
+Gateway](#the-gateway)), and it travels into the reservation as its
+idempotency key: inventory dedupes on it, so the retry that follows a
+lost response, or a crash before the order row exists, finds the
+reservation it already made instead of making a second one, with no
+order row to find it by. A reservation is a record with an expiry, so
+a failed second step leaks nothing past it, and the order carries the
+reservation id. The retry is owned at the edge: the client retries
+under the same `Idempotency-Key`, the marker reruns the request with
+the same `order_id`, and a retry wrapper on the remote client (see
+[Composition by decoration](#composition-by-decoration)) repeats one
+call under the same key. That is what makes the two impls of
+`InventoryServiceInterface` interchangeable in behavior and not only
+in signature: the remote one adds an unknown outcome to every call,
+and the key is what makes a rerun safe, so the signature carries it
+before the split, not after. A chain that must survive a crash
+between steps is a durable record advanced by a worker (see
+[Long-Running Orchestrations](#long-running-orchestrations)), the
+irreversible step last and a compensating step for each one before it
+(a saga).
 
 > **Principle:** Calls flow downward: services to services and managers;
 > managers to managers and storage; storage to storage. Nothing reaches
@@ -2376,6 +2435,17 @@ claim returns the `OpContext` the work runs under (see
 asked for it, so attribution and audit survive the asynchronous hop.
 Sweeps that act on every tenant ask the tenancy manager for one service
 context per live tenant.
+
+Authority and attribution are two fields of that context, and they
+answer two questions. The person authorized the work once, at
+enqueue, under their own stage, and that is the last time the system
+asks whether they may: the work runs on the service role's authority,
+`user_id` is the attribution, and a person whose membership ends
+while their work waits does not stop it. A kind of work that must stop
+when the person's permission does says so in its handler, which reads
+the live membership by name before its sensitive step; that is the one
+place an operation holding an `OpContext` asks again, and it is a
+decision of that kind of work, recorded.
 
 ### Shape of a Worker
 
@@ -3210,7 +3280,12 @@ compose stack. End-to-end tests build the container over the memory
 storage root and the local infra root, every backend a twin, and drive
 the app in-process. Markers `integration`, `e2e`, and `slow` decide
 which gate runs what; the checks of [Records of
-Decisions](#records-of-decisions) live in the unit suite.
+Decisions](#records-of-decisions) live in the unit suite. A run
+against a deployed environment checks what no in-process test can:
+the gateway in front, the credentials, the network, the worker
+processes beside the app. It is a smoke test of the deployment, in
+addition to the in-process suite and never in its place, and it is
+small: a sign-in, a write, a push.
 
 ## Technology Choices and How to Override Them
 
@@ -3374,13 +3449,16 @@ team makes per system, once the shape holds and the numbers are known,
 and a rule that fit every system would say nothing: a threat model and
 the rotation of secrets and keys; service objectives, alerting, and
 the on-call posture behind them; request deadlines, retry budgets, and
-admission under overload; disaster recovery, multi-region, and the
-reconciliation of database roles restored to different points; tenant
+admission under overload; disaster recovery and multi-region; tenant
 export and offboarding; load testing; the deprecation of an API
 version; and supply-chain rules such as dependency scanning. The shape
 is what makes each of them tractable when its time comes: one settings
 object to carry a deadline, one gateway to admit or refuse, one role to
-restore, one `org_id` to export by. When one of them earns a rule that
+restore, one `org_id` to export by. Where the shape already holds a
+piece of one, the text says so where the mechanism lives: the marker
+at the edge owns the retry of a create, the lease bounds a claim, and
+the outbox replays a role restored behind its siblings; the numbers a
+team puts on each are the team's. When one of them earns a rule that
 holds across systems, it lands beside the rules it touches.
 
 ## Next: An End-to-End Reference Implementation
