@@ -283,7 +283,7 @@ service depends on an app-specific interface.
 not in the OM, and it composes; it never decides. A service interface
 has two impls: the in-process one calls the manager and exists from the
 start, since every router calls through it; the remote one is the typed
-client, written at the split.
+client, written when a process stops holding what the callee needs.
 
 **Source.** The Network Layer, Direction of Calls.
 
@@ -292,7 +292,8 @@ the parameter list of the manager method such a service impl calls,
 which takes the other service's result as a plain argument; manager
 methods that sequence calls to another namespace's service-level
 operation; what implements each `*ServiceInterface` and which impl the
-container wires, since the swap at wiring time is what a split changes.
+container wires, since the swap at wiring time is the whole of that
+change.
 
 **Violation.** A manager method's signature accepts a `*ServiceInterface`
 or a service impl's dependency handle; a service impl passes its own
@@ -408,16 +409,18 @@ service locator reached from an operation.
 the caller's entity supplies the fields a caller may change, and
 `PROVENANCE_FIELDS` (`created_at`, `created_by`, `deleted_at`,
 `deleted_by`) stay as stored, so no caller rewrites who made a row or
-brings a deleted one back by sending an entity.
+brings a deleted one back by sending an entity. The copy is
+`model_validate` over the two dumps, because it carries one.
 
 **Source.** The Business Layer, Shape of an Operation.
 
-**Look for.** The copy in every `update_*`: what it starts from and
-what it excludes.
+**Look for.** The copy in every `update_*`: what it starts from, what
+it excludes, and which call builds it.
 
 **Violation.** An update copied from the caller's entity, so a sent
 `created_by` or a cleared `deleted_at` is written; an update that
-excludes fewer fields than `PROVENANCE_FIELDS`.
+excludes fewer fields than `PROVENANCE_FIELDS`; a `model_copy` fed the
+caller's dump.
 
 **Severity.** medium
 

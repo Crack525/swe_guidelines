@@ -63,17 +63,17 @@ OM distribution, under `om/`:
 
 | File                                   | Holds                                                                                         |
 |----------------------------------------|-----------------------------------------------------------------------------------------------|
-| `pyproject.toml`                       | `<root>-om`; `pydantic`, `pydantic-settings`, `sqlalchemy[asyncio]`, `asyncpg`, `alembic`, `uuid-utils`, and `<root>-infra` as a workspace source (`build_managers` takes `InfraInterface`; the OM depends on infra and never the reverse) |
+| `pyproject.toml`                       | `<root>-om`; `pydantic`, `pydantic-settings`, `sqlalchemy[asyncio]`, `asyncpg`, `alembic`, and `<root>-infra` as a workspace source (`build_managers` takes `InfraInterface`; the OM depends on infra and never the reverse) |
 | `src/<root>/om/base.py`                | `Platform`, the four mixins with `PROVENANCE_FIELDS` beside them (the constant naming `created_at`, `created_by`, `deleted_at`, and `deleted_by`, which every copy on update leaves as stored), `FrozenMapping`, `new_id`, `utcnow`, `EMPTY_UUID` |
 | `src/<root>/om/opcontext.py`           | `SecurityContext` with `user_id`, `org_id`, `role`, `permissions`, `teams`, `credential_kind`, and `credential_id` (ids and facts, never a `User` or `Org` entity; a socket ticket re-checks the credential by its id), `AppContext`, the stages `RequestContext` (request id, app, trace), `IdentityContext(RequestContext)` (identity id, email, credential), `OpContext(RequestContext)` (with the `org_id`, `user_id`, `credential_kind`, and `credential_id` properties), and `OperatorContext(IdentityContext)`, each produced by one transition on the tenancy manager; the scopes `RequestScope`, `TenantScope`, `ActorScope(TenantScope)`, `CredentialScope`, and `ProvenanceScope(ActorScope, RequestScope)` as `Protocol`s of read-only properties; `build_context(rctx, ...)`; `Role`, `Permission`, `CredentialKind`, and `AppType` are declared here, and the role-to-permission table in `tenancy/types/` reads them, so this module imports nothing above `base.py` and no module needs `TYPE_CHECKING` to stay acyclic |
 | `src/<root>/om/exceptions.py`          | `PlatformException` with `http_status` and `code`; `NotFound`, `Conflict`, `ValidationFailed`, `NotAuthorized`, `NotAuthenticated` |
 | `src/<root>/om/root.py`                | `build_managers(storage, infra) -> Managers`                                                   |
 | `src/<root>/om/storage/root.py`        | `StorageInterface` with `healthcheck` and `close`                                             |
 | `src/<root>/om/storage/roles.py`       | `DatabaseRole`, the table-to-role map                                                          |
-| `src/<root>/om/events/`                | the `events` namespace of the guideline's Realtime at the Edge: `Event(Identifiable)` with `org_id`, `seq`, `kind`, `target_id`, and a typed payload, its `activity`-role table, storage with the named atomic `append` that assigns `seq` (per tenant, gapless) and `read_after(org_id, after_seq, limit)`, and a manager the outbox relay calls to record one event per entity write, because every push is also a record |
+| `src/<root>/om/events/`                | the `events` namespace of the guideline's Realtime at the Edge: `Event(Identifiable)` with `org_id`, `seq`, `kind`, `target_id`, and a typed payload, its `activity`-role table, storage with the named atomic `append` that assigns `seq` (per tenant, gapless, from a `cursors` row per tenant in the same role, `UPDATE ... SET head = head + 1 ... RETURNING head` inside the append's transaction, the row inserted on the tenant's first event; never `MAX(seq) + 1` with a retry), `read_head(org_id)` from the same row, and `read_after(org_id, after_seq, limit)`, and a manager the outbox relay calls to record one event per entity write, because every push is also a record |
 | `src/<root>/om/audit/`                 | the `audit` namespace, the cross-cutting swimlane of Namespaces as Swimlanes: `AuditEntry(Identifiable)` with the same shape as an `Event` plus the principal and the app (`org_id`, `seq`, `kind`, `target_id`, a typed payload, `user_id`, `credential_id`, `app_type`), as Realtime at the Edge states; its `activity`-role table, storage with the named atomic `append` that assigns `seq` and `read_after(org_id, after_seq, limit)`, and `AuditManagerInterface`, which the dead-letter path of a worker and the operator plane write through |
-| `src/<root>/om/outbox/`                | the transactional outbox of Database Roles: `OutboxRow(Identifiable)` with `org_id`, `kind`, `target_id`, `payload` (a `FrozenMapping`), and `done_at`, its `core`-role table, storage with `read_pending(limit)` and `mark_done(org_id, row_id)`, and `OutboxRelayInterface.relay(org_id, row)` with its impl, which appends the `Event` through the events manager, publishes `ENTITY_CHANGED`, and marks the row done, idempotent on the row's id; a manager takes the relay by interface and calls it after every write, and the worker sweep relays what `read_pending` returns |
-| `src/<root>/om/idempotency/`           | the edge idempotency record: `core`-role table unique on `(org_id, user_id, key)`, storage, and a manager with `begin` and `finish`, so a replayed creating request dedupes on a durable unique index like every queue handler, and the cache is only a read-through |
+| `src/<root>/om/outbox/`                | the transactional outbox of Database Roles: `OutboxRow(Identifiable, Created)`, as Naming Entities declares it, with `org_id`, `kind`, `target_id`, `payload` (a `FrozenMapping`), and `done_at`, its `core`-role table, storage with `read_pending(limit)` and `mark_done(org_id, row_id)`, and `OutboxRelayInterface.relay(org_id, row)` with its impl, which appends the `Event` through the events manager, publishes `ENTITY_CHANGED`, and marks the row done, idempotent on the row's id; a manager takes the relay by interface and calls it after every write, and the worker sweep relays what `read_pending` returns |
+| `src/<root>/om/idempotency/`           | the edge idempotency marker: `IdempotencyMarker(Identifiable, Created)`, as Naming Entities declares it, its `core`-role table unique on `(org_id, user_id, key)`, storage, and a manager with `begin` and `finish`, so a replayed creating request dedupes on a durable unique index like every queue handler, and the cache is only a read-through |
 | `src/<root>/om/storage/migrate.py`     | `run_sql(role, file)`, the check that a SQL file names only tables of its role, the ORM-versus-schema comparison, and the migration CLI (`upgrade --role <role>` or `--all`, `check`) |
 | `src/<root>/om/storage/tables/base.py` | `Base` deriving the schema from the role map, the mixins with sort-order bands, `GlobalIdentifiableMixin`, and `FeedIdentifiableMixin`, whose `org_id` carries no single-column index (a feed table composes it instead of redeclaring `org_id`) |
 | `src/<root>/om/storage/utils/translation.py` | `to_row`, `to_model`, `apply_row`                                                         |
@@ -126,13 +126,16 @@ Nothing; the tree is new. Every later step appends to the files above.
    address.
 7. `git init` in `<target-dir>`, nothing staged (skipped when the
    target was a fresh repository).
-8. Read `${CLAUDE_SKILL_DIR}/../arch-review-full/SKILL.md` and run it
-   over the whole tree. Close every high finding and rerun `make
-   check`; list the rest in the output for the person. A fresh
-   scaffold passes the gates and still carries findings the gates
-   cannot see: a setting Terraform does not pass, a write without its
-   authorization line, a socket route outside the gateway, a creating
-   route without its idempotency key.
+8. Before the review, sweep the tree for the four misses a fresh
+   scaffold makes most, and fix each: a setting the Terraform root
+   does not pass to the service, a mutating manager operation whose
+   first line is not `ctx.require(...)`, a socket route mounted
+   outside the gateway, a creating route without the `Idempotency-Key`
+   dependency. Then read `${CLAUDE_SKILL_DIR}/../arch-review-full/SKILL.md`
+   and run it over the whole tree. Close every high finding and rerun
+   `make check`; list the rest in the output for the person. A high
+   finding on a fresh tree is a defect of this skill: name it in the
+   output so it can be closed at the source.
 
 Stop at the first step whose gate fails and report where it stopped.
 
