@@ -6,6 +6,115 @@ which number.
 
 ## Unreleased
 
+## 0.19.0 (2026-09-20)
+
+A deployed system is an operated system, and the guideline said
+nothing about who operates it, with what, or inside which boundary.
+Minor: rules are added, and one exclusion narrows. Two sections land.
+"Operations" states the posture in one sentence, people steer and
+agents maintain, and then makes it concrete: four operator roles, the
+credential a skill verifies before it reads, nine built-in operational
+skills, the dashboard and the alarms declared as code in both twins,
+autoscaling as one root flip that is off by default, a budget from the
+first apply, create and nuke as the administrator's two scripted runs,
+one traffic generator behind the stress test, and one test that reads
+every signal back by request id. "Documentation as Code" puts a
+README at every abstraction level, writes `om/README.md` for a reader
+with no code, and names what each audience is served in one map at
+the root. A new lens group, `ops`, judges both. Load testing leaves
+"What This Document Does Not Cover" as a shape; its numbers stay
+there.
+
+### Added
+
+- `architecture.md`, "Operations": people steer, agents maintain. Every
+  operational task is a skill a person runs with an agent, and the
+  boundary is the credential the skill holds: a person's or an agent's
+  credential reads and never writes. Lens `OPS-01`.
+- `architecture.md`, "Operator Roles": the administrator (a person; the
+  create and the nuke, nothing else), the deployer (the pipeline, the
+  only role that writes, production's split into plan and apply), the
+  investigator (every signal and every description, no secret value,
+  no data bucket object, no database row, no other role), and the
+  supporter (the investigator plus a named tenant's rows through the
+  operator plane with a read allowlist entry). Roles are named
+  `<product>-<role>-<environment>` and fenced by tag; the agents'
+  principal is one user that can only assume the read-only roles.
+  Lenses `OPS-02` to `OPS-07`.
+- `architecture.md`, "Operator Credentials": a skill names its profile,
+  verifies it holds that one and no wider, and reads the rest from one
+  owner-only file per environment; no credential enters the
+  repository, a skill, a log, or a report; the local stack is an
+  environment every skill runs against. Lenses `OPS-08` to `OPS-10`.
+- `architecture.md`, "Operational Skills": the built-in set of nine,
+  one per task that repeats, each stating its role, its check, what it
+  reads, what it never does, and its report; a watch outlives its
+  conversation and is written for a burst; the first responder is an
+  agent that reads the platform's size before it escalates. Lenses
+  `OPS-11` to `OPS-13`.
+- `architecture.md`, "Dashboards and Alarms as Code": one operator
+  dashboard per environment, declared in both twins with the same
+  panels held equal by a test; a default alarm set to one topic; a
+  tenant's view of its organization is a product feature, never a
+  telemetry query. Lenses `OPS-14` to `OPS-16`.
+- `architecture.md`, "Scale-Out as a Lever": every process declares its
+  autoscaling, and one root variable per environment turns it on, off
+  by default, with every lever below it on. Lens `OPS-17`.
+- `architecture.md`, "Cost Boundaries": a budget and an anomaly monitor
+  from the first apply, retention on every log group, the environment
+  tag on every resource. Lens `OPS-18`.
+- `architecture.md`, "Creating and Destroying an Environment": the
+  administrator's two runs, scripted, narrated by a skill, dry-runnable;
+  production is destroyed only behind a typed name and a merged change.
+  Lens `OPS-19`.
+- `architecture.md`, "Traffic and Stress": one traffic generator drives
+  the edge with realistic sessions and four profiles; the stress test
+  is the same generator with a scenario and a target; the gate runs it
+  thirty seconds at light and proves the wiring, never the capacity.
+  Lenses `OPS-20`, `OPS-21`.
+- `architecture.md`, "The Telemetry Round Trip": one test drives real
+  traffic and reads every signal back by request id through one reader
+  interface with a local and a cloud impl, and against a deployed
+  environment it is the smoke test. Lens `OPS-22`.
+- `architecture.md`, "Documentation as Code": documents are code,
+  reviewed with the change they describe; every abstraction level
+  carries a README in its own language; `om/README.md` names the nouns
+  and their relations for a reader with no code and carries no
+  developer or operator concern; `llms.txt` names what each audience is
+  served and exposure is by listing; every document speaks product,
+  technology, or service, and nothing that would matter if it leaked.
+  Lenses `OPS-23` to `OPS-27`.
+
+- `skills/_shared/ops-skills/`: nine project-local skill templates,
+  `ops-investigate`, `ops-watch`, `ops-root-cause`,
+  `ops-infra-as-code`, `ops-cloud-deployment-create`,
+  `ops-cloud-deployment-nuke`, `ops-simulate-traffic`,
+  `stress-test-create-or-update`, and `stress-test-run`, each stating
+  its role, its credential check, what it reads, what it never does,
+  and its report, every one runnable against `local`.
+  `arch-scaffold-new` copies them into a new tree under
+  `.claude/skills/` with the product's name in, and its skeleton gains
+  the `ops` distribution, `om/README.md`, `deployment/README.md`,
+  `llms.txt`, the create and nuke scripts, the investigate roles, the
+  operators' user, the budget, the alarms, the dashboard, and the
+  autoscaling and destroyable switches; a new step runs the telemetry
+  round trip and thirty seconds of light traffic as a wiring check.
+  `docs/adopting.md` gains "Operate with the built-in skills".
+- `lenses/ops.md`, the eighth group, 27 lenses, 229 in all, and
+  `arch-review-ops`, generated from the template; `arch-review-full`
+  fans out to eight.
+
+### Changed
+
+- `architecture.md`, "What This Document Does Not Cover": "Load
+  testing" becomes "The numbers a stress test holds a system to", and
+  alerting narrows to the thresholds of the alarms, because the shape
+  of both now lives in "Operations".
+- `architecture.md`, "Infrastructure as Code", "Tests", "Scalability
+  by Design", and the monorepo tree: each names the piece of
+  "Operations" it touches, and the tree gains `ops/`, `llms.txt`,
+  `om/README.md`, `deployment/README.md`, and `.claude/skills/`.
+
 ## 0.18.0 (2026-09-20)
 
 The document is rewritten to be read. Not restructured: every section,
