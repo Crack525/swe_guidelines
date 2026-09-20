@@ -20,8 +20,13 @@ the prescribed shape.
   cites the section it comes from, by title.
 - **[`skills/`](skills/)**: Claude Code skills. Eight group reviews, one
   full review that runs them in parallel, six scaffolds, an explainer,
-  a deviation recorder, a dependency upgrader, and one skill that grows
-  the guideline itself.
+  a deviation recorder, a dependency upgrader, one skill that grows the
+  guideline itself, one that measures a skill against a rubric, and one
+  that asks the products a reader would use.
+- **[`benchmark/`](benchmark/README.md)**: the harness that runs a
+  subject, keeps what happened, and has frontier models from several
+  providers score it against a rubric. It is not part of `make check`:
+  a run costs money and takes minutes.
 
 ## Install the skills
 
@@ -74,6 +79,8 @@ in its own `specs/` folder are in [`docs/adopting.md`](docs/adopting.md).
 | `arch-deviate`            | Records a deliberate deviation as an ADR in the consuming project            |
 | `arch-upgrade-deps`       | Moves every dependency to its latest stable or LTS release and runs the gates |
 | `arch-new-aspect`         | Incorporates a new aspect into the guideline and cascades it through lenses, skills, and docs (runs in a checkout of this repository) |
+| `arch-benchmark`          | Runs a benchmark scenario from this checkout and reports what the frontier models scored it (runs in a checkout of this repository) |
+| `arch-benchmark-browser`  | Runs the benchmark prompt through chatgpt.com, claude.ai, and gemini.google.com in a signed-in browser, two t-shirt sizes for the model and the effort, and saves each answer with its conversation URL |
 
 Every review skill takes the same argument (empty for the current
 branch, a path, a git range, or `all`). The eight group skills produce
@@ -86,6 +93,7 @@ Claude Code 2.1 and later.
 ## Develop
 
 ```bash
+make benchmark    # the smoke scenario, judged by three providers (costs money, not part of check)
 make check        # what CI runs: markdownlint, lens format and citations, vocabulary leaks, links,
                   # table of contents, version copies, generated skills up to date,
                   # skill shape, the reviewer agent against the review template, the checkers' tests,
