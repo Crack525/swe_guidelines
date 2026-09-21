@@ -46,7 +46,9 @@ def test_a_planted_finding_is_named_by_its_lens_and_its_file_together():
 
 
 def test_a_file_named_before_the_lens_on_the_same_line_counts():
-    assert E.named(EXPECTED, "- `manager.py:37`: OM-12, uuid4 for an id")["named"] == ["F2"]
+    result = E.named(EXPECTED, "- `manager.py:37`: OM-12, uuid4 for an id")
+    assert result is not None
+    assert result["named"] == ["F2"]
 
 
 def test_no_planted_list_means_no_check():
@@ -61,16 +63,18 @@ def test_render_puts_the_expected_list_before_the_source():
     assert E.render(None, "") == ""
 
 
-def test_every_planted_finding_of_review_om_points_at_a_line_that_exists():
+def test_every_planted_finding_of_review_om_points_at_the_line_it_shows():
     """The answers and the checkout they describe stay in step. Read without pyyaml."""
     fixtures = Path(__file__).resolve().parent.parent / "benchmark" / "fixtures"
     text = (fixtures / "review-om.expected.yaml").read_text(encoding="utf-8")
-    entries = re.findall(r"- id: (F\d+)\n\s+lens: (\S+)\n\s+file: (\S+)\n\s+line: (\d+)", text)
+    entries = re.findall(r"- id: (F\d+)\n\s+lens: (\S+)\n\s+file: (\S+)\n\s+line: (\d+)\n\s+shows: '(.*)'", text)
     assert len(entries) == 8
-    lenses = {lens for _, lens, _, _ in entries}
+    lenses = {lens for _, lens, _, _, _ in entries}
     assert len(lenses) == 8, "one lens per planted finding"
-    for fid, lens, file, line in entries:
+    for fid, _lens, file, line, shows in entries:
         path = fixtures / "review-om" / file
         assert path.is_file(), f"{fid}: {file}"
-        assert 1 <= int(line) <= len(path.read_text(encoding="utf-8").splitlines()), f"{fid}: line {line}"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert 1 <= int(line) <= len(lines), f"{fid}: line {line}"
+        assert lines[int(line) - 1].strip() == shows.replace("''", "'"), f"{fid}: line {line} no longer shows the defect"
     assert "expected" not in {p.name for p in (fixtures / "review-om").rglob("*")}, "the answers stay out of the checkout"

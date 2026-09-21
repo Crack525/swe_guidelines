@@ -69,6 +69,14 @@ def tail(path: Path, stop_after_s: float | None = None):
         time.sleep(POLL_S)
 
 
+class RunsServer(ThreadingHTTPServer):
+    """The server, holding the runs folder its handlers serve."""
+
+    def __init__(self, address: tuple[str, int], runs: Path) -> None:
+        super().__init__(address, Handler)
+        self.runs_folder = Path(runs)
+
+
 class Handler(BaseHTTPRequestHandler):
     """One request. The runs folder is set on the server."""
 
@@ -76,7 +84,8 @@ class Handler(BaseHTTPRequestHandler):
 
     @property
     def runs(self) -> Path:
-        return self.server.runs_folder  # type: ignore[attr-defined]
+        assert isinstance(self.server, RunsServer)
+        return self.server.runs_folder
 
     def log_message(self, fmt: str, *args) -> None:  # quieter than the default
         print(f"{self.address_string()} {fmt % args}")
@@ -95,7 +104,7 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return self.runs / name
 
-    def do_GET(self) -> None:  # noqa: N802 - the base class names it
+    def do_GET(self) -> None:
         path = unquote(urlparse(self.path).path)
         parts = [p for p in path.split("/") if p]
         try:
@@ -130,12 +139,14 @@ class Handler(BaseHTTPRequestHandler):
     def _index(self) -> None:
         rows = "\n".join(
             f"<li><code>{html.escape(r['id'])}</code> "
-            f"<a href=\"/runs/{html.escape(r['id'])}/report.md\">report</a> "
-            f"<a href=\"/runs/{html.escape(r['id'])}/results.json\">results</a> "
-            f"<a href=\"/runs/{html.escape(r['id'])}/streams/cli\">command line</a></li>"
+            f'<a href="/runs/{html.escape(r["id"])}/report.md">report</a> '
+            f'<a href="/runs/{html.escape(r["id"])}/results.json">results</a> '
+            f'<a href="/runs/{html.escape(r["id"])}/streams/cli">command line</a></li>'
             for r in runs_of(self.runs)
         )
-        body = f"<!doctype html><meta charset=utf-8><title>benchmark runs</title><h1>Runs</h1><ul>{rows or '<li>none yet</li>'}</ul>"
+        body = (
+            f"<!doctype html><meta charset=utf-8><title>benchmark runs</title><h1>Runs</h1><ul>{rows or '<li>none yet</li>'}</ul>"
+        )
         self._send(200, body.encode(), "text/html; charset=utf-8")
 
     def _sse(self, path: Path) -> None:
@@ -167,8 +178,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(runs: Path, port: int, host: str = "127.0.0.1") -> None:
-    server = ThreadingHTTPServer((host, port), Handler)
-    server.runs_folder = Path(runs)  # type: ignore[attr-defined]
+    server = RunsServer((host, port), runs)
     print(f"serving {runs} at http://{host}:{port}/")
     try:
         server.serve_forever()

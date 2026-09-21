@@ -35,7 +35,9 @@ def test_a_subject_that_runs_too_long_is_killed_and_marked(tmp_path):
     rt = RT.build("host", tmp_path)
     rt.prepare()
     with CliStream(tmp_path / "cli.jsonl") as stream:
-        status = rt.run([sys.executable, "-c", "import time; time.sleep(30)"], rt.workspace, {"PATH": "/usr/bin:/bin"}, stream, timeout_s=1)
+        status = rt.run(
+            [sys.executable, "-c", "import time; time.sleep(30)"], rt.workspace, {"PATH": "/usr/bin:/bin"}, stream, timeout_s=1
+        )
     assert status.timed_out and not status.ok
 
 
@@ -55,6 +57,7 @@ def test_the_container_mounts_the_target_read_only_and_names_the_keys(tmp_path):
 
 def test_the_container_build_command_names_the_dockerfile(tmp_path):
     rt = RT.build("container", tmp_path, None, {"image": "img:1", "dockerfile": tmp_path / "runtime" / "Dockerfile"})
+    assert isinstance(rt, RT.ContainerRuntime)
     assert rt.build_command()[:5] == ["docker", "build", "-t", "img:1", "-f"]
 
 
@@ -66,6 +69,7 @@ def test_the_vm_runs_behind_the_prefix_and_fills_the_sync_paths(tmp_path):
         "fetch": ["fake-copy", "station:{remote}/", "{local}/"],
     }
     rt = RT.build("vm", tmp_path, None, config)
+    assert isinstance(rt, RT.VmRuntime)
     rt.workspace = tmp_path / "workspace"
     assert rt.command(["claude", "-p", "hi"], rt.workspace) == ["fake-shell", "station", "--", "claude", "-p", "hi"]
     assert rt.sync_command() == ["fake-copy", f"{rt.workspace}/", "station:/opt/work/"]
@@ -105,7 +109,9 @@ def test_each_runtime_names_the_plugin_and_the_target_as_the_subject_sees_them(t
     assert (host.plugin_path(), host.target_path()) == (str(plugin.resolve()), str(target.resolve()))
     box = RT.build("container", tmp_path, target, {"image": "img:1"}, plugin=plugin)
     assert (box.plugin_path(), box.target_path()) == ("/plugin", "/target")
-    vm = RT.build("vm", tmp_path, target, {"exec_prefix": ["x"], "remote_plugin": "/opt/p", "remote_target": "/opt/t"}, plugin=plugin)
+    vm = RT.build(
+        "vm", tmp_path, target, {"exec_prefix": ["x"], "remote_plugin": "/opt/p", "remote_target": "/opt/t"}, plugin=plugin
+    )
     assert (vm.plugin_path(), vm.target_path()) == ("/opt/p", "/opt/t")
     bare = RT.build("container", tmp_path)
     assert (bare.plugin_path(), bare.target_path()) == (None, None)

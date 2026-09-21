@@ -44,11 +44,11 @@ def test_an_unknown_key_is_refused(tmp_path):
 
 
 def test_each_kind_needs_its_own_field(tmp_path):
-    with pytest.raises(S.ScenarioError, match="needs subject.skill"):
+    with pytest.raises(S.ScenarioError, match=r"needs subject\.skill"):
         S.from_data(dict(MINIMAL, subject={"prompt": "x"}))
-    with pytest.raises(S.ScenarioError, match="needs subject.argv"):
+    with pytest.raises(S.ScenarioError, match=r"needs subject\.argv"):
         S.from_data(dict(MINIMAL, kind="command", subject={}))
-    with pytest.raises(S.ScenarioError, match="needs subject.prompt"):
+    with pytest.raises(S.ScenarioError, match=r"needs subject\.prompt"):
         S.from_data(dict(MINIMAL, kind="qa", subject={}))
 
 
@@ -104,3 +104,13 @@ def test_a_relative_path_is_read_from_the_scenario_folder(tmp_path):
     assert scn.resolve("../fixtures/x") == (tmp_path / "fixtures" / "x").resolve()
     assert scn.resolve("/abs/x") == Path("/abs/x").resolve()
     assert scn.resolve(None) is None
+
+
+def test_a_qa_subject_answers_with_exactly_one_provider():
+    qa = dict(MINIMAL, kind="qa", subject={"prompt": "why?", "provider": "gemini"})
+    assert S.from_data(qa).subject.provider == "gemini"
+    for many in ("all", "anthropic,openai", "3"):
+        with pytest.raises(S.ScenarioError, match="names one provider"):
+            S.from_data(dict(qa, subject={"prompt": "why?", "provider": many}))
+    with pytest.raises(S.ScenarioError, match="unknown provider"):
+        S.from_data(dict(qa, subject={"prompt": "why?", "provider": "acme"}))
