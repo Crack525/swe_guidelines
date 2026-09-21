@@ -87,6 +87,9 @@ which number.
   `v*` tag that differs from the version in `plugin.json`.
 - Dependabot proposes the updates to the pinned actions, weekly, in one
   pull request.
+- Lens `STO-29` Every read that returns a list is bounded in its
+  statement. The only lens that named the clamp was `NET-13`, which
+  judges the wire; nothing judged the read under it. 232 lenses.
 
 ### Changed
 
@@ -101,6 +104,19 @@ which number.
   `make check` on 3.10 and on 3.14.
 - CI caches its npm and uv downloads, and a new push to a pull request
   cancels the run it replaces. A benchmark run is never cancelled.
+- `architecture.md`: the main list example is bounded. `get_warehouses`
+  on the manager and the service, and `read_warehouses` on storage,
+  take a `limit`, and the Postgres statement carries it. The paging
+  rule asked for a server-clamped limit while the example that teaches
+  the shape read every row.
+- `architecture.md`, "Storage Principles": every read that returns a
+  list is bounded in its statement. Storage applies the bound it is
+  given; the caller picks it, the manager from the page size in its
+  options, a worker or a sweep from its batch size. "Public Types"
+  says where the clamp happens: the route takes the limit, the manager
+  clamps it, the storage read carries it.
+- `architecture.md`, "Buckets": `list` takes a `limit` and a key to
+  start after, and returns keys in lexical order.
 
 ## 0.21.0 (2026-09-20)
 
