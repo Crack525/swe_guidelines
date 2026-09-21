@@ -1,8 +1,10 @@
 ---
 name: Bug report
 about: A checker, a skill, or a lens misbehaves
-title: "bug: "
+title: 'bug: '
 labels: bug
+assignees: ''
+
 ---
 
 ## What happened

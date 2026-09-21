@@ -1,8 +1,10 @@
 ---
 name: Rule change
 about: Propose adding, sharpening, or removing a rule in the guideline
-title: "rule: "
-labels: rule
+title: 'rule: '
+labels: ''
+assignees: ''
+
 ---
 
 ## The rule
