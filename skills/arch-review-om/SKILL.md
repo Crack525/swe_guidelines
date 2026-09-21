@@ -1,7 +1,7 @@
 ---
 name: arch-review-om
 description: "Review code or a change through the Object Model lenses of the Software Design and Architecture Guidelines. Covers The Domain as the Source of Truth, Naming Entities, Namespaces as Swimlanes: source of truth, mixins, immutability, identifiers, namespaces, pure rules. Use for a change that touches this area, or as one leg of arch-review-full."
-allowed-tools: Read, Grep, Glob, Bash(git diff:*), Bash(git log:*), Bash(git status:*), Bash(git rev-parse:*), Bash(git merge-base:*), Bash(git symbolic-ref:*)
+allowed-tools: Read, Grep, Glob, Bash(python3:*), Bash(git diff:*), Bash(git log:*), Bash(git status:*), Bash(git rev-parse:*), Bash(git merge-base:*), Bash(git symbolic-ref:*)
 ---
 
 # arch-review-om
@@ -37,24 +37,50 @@ of a changed signature.
 
 1. Read the lens file end to end before looking at any code.
 2. Establish the scope and list the files in it.
-3. For every lens, in id order, decide one of: **finding** (evidence of
-   a breach, with a file and line), **pass** (the lens applies and the
-   code satisfies it), **not applicable** (nothing in scope touches
-   what the lens judges), or **unverified** (the lens applies, and
-   what would decide it lies outside the scope and the files step 2
-   pulled in; name what would decide it). Keep the "Look for" and
-   "Violation" text of the lens in front of you while deciding.
-4. Verify every finding against the real source: open the file, confirm
+3. Run the checker that shipped with this lens file, from the root of
+   the repository under review:
+   `python3 "${CLAUDE_SKILL_DIR}/../../checkers/arch_check.py" --group om --format json`.
+   Exit 0 means no findings and exit 1 means findings; both are a
+   run. Its findings on files outside the scope are dropped, and so is
+   anything under `exceptions_applied`: a deviation the project
+   recorded with an ADR, which is not a finding. The output's
+   `rules_run` says which lenses it covered, the rules this guideline
+   ships and the project's own alike, each with a coverage and a
+   summary. A lens covered `full` is decided here: each of its
+   findings in scope is a finding, with the checker's file and line,
+   and no finding is a pass whose evidence is the checker, which read
+   every file. A lens covered `partial` is decided in step 4, and the
+   rule's summary says which part the checker holds: a checker finding
+   in scope makes the lens a finding whatever the rest shows, and no
+   checker finding leaves the rest to judge; the lens passes only when
+   that rest passes too. A lens absent from `rules_run` is judged whole
+   in step 4. When the checker cannot run (a Python older than 3.11,
+   exit code 2, a project pinned to a newer Python than `python3`), say so in the report's Scope line and judge
+   every lens in step 4, the ones it would have decided included. The
+   review is the checker's fallback.
+4. For every lens the checker did not decide, in id order, decide one
+   of: **finding** (evidence of a breach, with a file and line),
+   **pass** (the lens applies and the code satisfies it), **not
+   applicable** (nothing in scope touches what the lens judges), or
+   **unverified** (the lens applies, and what would decide it lies
+   outside the scope and the neighbors the Input section says to read;
+   name what would decide it). A partial lens whose judged part touches
+   nothing in scope is not applicable, whatever the checker read. Keep the "Look for" and "Violation" text of the lens
+   in front of you while deciding.
+5. Verify every finding against the real source: open the file, confirm
    the line, confirm the surrounding code does not already handle it.
    Drop a finding you cannot point at. Verify a **pass** on a `high`
    lens the same way: open the file that would breach it and name that
    file in the report; a high lens passes on evidence, never on the
    absence of a finding, and a high lens whose evidence is out of
-   reach is unverified, never passed.
-5. Assign severity from the lens, adjusted only downward when the
+   reach is unverified, never passed. A clean run of the checker is
+   evidence for a lens it decides whole; name `arch-check` as the proof.
+   For a partial high lens it is evidence for the checker's part only,
+   and the rest needs a file of its own.
+6. Assign severity from the lens, adjusted only downward when the
    breach is contained (a test double, a documented exception the
    guideline names, an ADR cited next to the code).
-6. Write the report in the format below. Nothing else; no preamble.
+7. Write the report in the format below. Nothing else; no preamble.
 
 Never edit, stage, or commit. This skill reads and reports.
 
